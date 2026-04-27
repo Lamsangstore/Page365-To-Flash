@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Flash Converter Pro - Standalone</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React & ReactDOM CDN -->
@@ -178,12 +179,39 @@
                             const totalQty = order.items.reduce((sum, item) => sum + item.qty, 0);
                             
                             // 1. Customer Order Number: ใช้รหัสสินค้า 3 ตัวหน้า (จำกัด 64 ตัวอักษร)
-                            const orderParts = order.items.map(i => {
+                            const colorAbbr = {
+                                "ขาว": "ขาว", "แดง": "แดง", "ดำ": "ดำ",
+                                "คาราเมล": "ครม", "น้ำตาล": "นต", "กรม": "ก",
+                                "กาแฟ": "กฟ", "ชานม": "ชน", "น้ำตาลเข้ม": "นตข",
+                                "กากี": "กากี", "ครีม": "ค", "เทา": "ท",
+                                "น้ำตาลอ่อน": "นตอ", "ขาว & กากี": "ข&ก",
+                                "ดำ & กากี": "ด&ก", "ดำ & ขาว": "ด&ข",
+                                "ดำ & ส้ม": "ด&ส", "ส้มอิฐ": "สอ", "โกโก้": "กก",
+                                "ลาเต้": "ลต", "เขียว": "เขียว", "ชมพู": "ชพ",
+                                "เบจ": "เบจ", "ฟ้า": "ฟ้า", "เหลืองมัสตาร์ด": "หล",
+                                "ม่วง": "ม่วง", "ขาวนวล": "ขาว",
+                                "Moonless Night (ด้ายดำ)": "ดำ", "Moonlit Night (ด้ายขาว)": "ขาว",
+                                "เขียวขี้ม้า": "ขขม", "เทาเข้ม": "ทข", "เทาอ่อน": "ทอ",
+                                "เหลือง": "หล", "เขียวเข้ม": "ขม", "ม่วงเข้ม": "มข",
+                                "ม่วงอ่อน": "มอ", "เหลืองอ่อน": "หลอ", "แดงไวน์": "แดง",
+                                "เทาดำ": "ทด", "ชมพูนู้ด": "ชพ", "โอวัลติน": "อวต",
+                                "มะกอก": "มก", "เลม่อน": "ลม", "ชาโคล": "ชค", "เทาฟ้า": "ทฟ"
+                            };
+                            const abbrevColor = (v) => colorAbbr[v] || v;
+
+                            const buildOrderParts = (useAbbr) => order.items.map(i => {
                                 const productCode = String(i.name).substring(0, 3).trim();
-                                const variantStr = i.variant ? `-${i.variant}` : "";
+                                const variant = i.variant || "";
+                                const variantStr = variant ? `-${useAbbr ? abbrevColor(variant) : variant}` : "";
                                 return `${i.qty} = ${productCode}${variantStr}`;
                             });
-                            let orderInfoStr = `${order.no} | ${orderParts.join(" | ")}`;
+
+                            const partsLong = buildOrderParts(false);
+                            let orderInfoStr = `${order.no} | ${partsLong.join(" | ")}`;
+                            if (orderInfoStr.length > 64) {
+                                const partsShort = buildOrderParts(true);
+                                orderInfoStr = `${order.no} | ${partsShort.join(" | ")}`;
+                            }
                             if (orderInfoStr.length > 64) orderInfoStr = orderInfoStr.substring(0, 64);
 
                             // 2. Remark1: ใช้ชื่อสินค้าเต็มรูปแบบ
@@ -194,10 +222,26 @@
 
                             const postalCode = (order.address.match(/\d{5}$/) || [""])[0];
 
+                            // ถ้าที่อยู่มีอำเภอเมือง ให้ลบคำนำหน้า ต. อ. จ. ออก
+                            const cleanAddress = (addr) => {
+                                if (/อำเภอเมือง|อ\.เมือง/.test(addr)) {
+                                    return addr
+                                        .replace(/ตำบล\s*/g, "")
+                                        .replace(/ต\.\s*/g, "")
+                                        .replace(/อำเภอ\s*/g, "")
+                                        .replace(/อ\.\s*/g, "")
+                                        .replace(/จังหวัด\s*/g, "")
+                                        .replace(/จ\.\s*/g, "")
+                                        .replace(/\s{2,}/g, " ")
+                                        .trim();
+                                }
+                                return addr;
+                            };
+
                             return {
                                 [headersForExport[0]]: orderInfoStr,
                                 [headersForExport[1]]: order.customerName,
-                                [headersForExport[2]]: order.address,
+                                [headersForExport[2]]: cleanAddress(order.address),
                                 [headersForExport[3]]: postalCode,
                                 [headersForExport[4]]: order.phone,
                                 [headersForExport[5]]: "",
