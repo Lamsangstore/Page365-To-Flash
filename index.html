@@ -40,6 +40,7 @@
             const [fileName, setFileName] = useState("");
             const [status, setStatus] = useState("idle");
             const [errorMsg, setErrorMsg] = useState("");
+            const [selectedRows, setSelectedRows] = useState(new Set());
             
             const fileInputRef = useRef(null);
             const tableContainerRef = useRef(null);
@@ -54,10 +55,33 @@
             const startX = useRef(0);
             const startWidth = useRef(0);
 
-            const productPresets = [
-                { label: "กางเกง", weight: 0.5, length: 32, width: 25, height: 5, itemType: "เสื้อผ้า", productType: "Standard" },
-                { label: "เข็มขัด", weight: 0.2, length: 15, width: 15, height: 5, itemType: "เสื้อผ้า", productType: "Standard" },
+            const DEFAULT_PRESETS = [
+                { id: "pants", label: "กางเกง", prefix: "P", keywords: ["กางเกง", "pants", "trouser"], weight: 0.5, length: 32, width: 25, height: 5, itemType: "เสื้อผ้า", productType: "Standard", priority: 1 },
+                { id: "belt",  label: "เข็มขัด", prefix: "B", keywords: ["เข็มขัด", "belt"],            weight: 0.2, length: 15, width: 15, height: 5, itemType: "เสื้อผ้า", productType: "Standard", priority: 0 },
             ];
+
+            const loadPresets = () => {
+                try {
+                    const saved = localStorage.getItem('flashConverter_presets');
+                    if (saved) {
+                        const parsed = JSON.parse(saved);
+                        // merge saved values into defaults (preserve structure/keywords)
+                        return DEFAULT_PRESETS.map(def => {
+                            const saved = parsed.find(p => p.id === def.id);
+                            return saved ? { ...def, ...saved } : def;
+                        });
+                    }
+                } catch(e) {}
+                return DEFAULT_PRESETS;
+            };
+
+            const [productPresets, setProductPresets] = useState(loadPresets);
+
+            const updatePreset = (id, field, value) => {
+                const next = productPresets.map(p => p.id === id ? { ...p, [field]: value } : p);
+                setProductPresets(next);
+                localStorage.setItem('flashConverter_presets', JSON.stringify(next));
+            };
 
             const [settings, setSettings] = useState({
                 weightPerPiece: 0.5,
@@ -68,6 +92,8 @@
                 productType: "Standard"
             });
 
+            const [manualOverride, setManualOverride] = useState(false);
+
             const applyPreset = (preset) => {
                 setSettings({
                     weightPerPiece: preset.weight,
@@ -77,7 +103,10 @@
                     itemType: preset.itemType,
                     productType: preset.productType
                 });
+                setManualOverride(true);
             };
+
+            const clearOverride = () => setManualOverride(false);
 
             // หัวตารางเป๊ะตามต้นแบบ (ใช้ \r\n เพื่อความเข้ากันได้สูงสุดกับ Excel/Flash Portal)
             const headersForExport = [
@@ -191,15 +220,15 @@
                             });
                         });
 
-                        // ตาราง preset สินค้า (ชื่อสินค้าใช้ keyword matching)
-                        const PRODUCT_PRESETS = [
-                            { keywords: ["กางเกง"], weight: 0.5, length: 32, width: 25, height: 5, priority: 1 },
-                            { keywords: ["เข็มขัด"], weight: 0.2, length: 15, width: 15, height: 5, priority: 0 },
-                        ];
-
+                        // detectPreset ใช้ productPresets จาก component scope
                         const detectPreset = (name) => {
+                            const code = name.trim().toUpperCase();
+                            // match by prefix first
+                            const byPrefix = productPresets.find(p => p.prefix && code.startsWith(p.prefix));
+                            if (byPrefix) return byPrefix;
+                            // fallback: keyword match
                             const n = name.toLowerCase();
-                            return PRODUCT_PRESETS.find(p => p.keywords.some(k => n.includes(k))) || null;
+                            return productPresets.find(p => p.keywords && p.keywords.some(k => n.includes(k))) || null;
                         };
 
                         const flashData = Object.values(groupedOrders).map(order => {
@@ -211,7 +240,7 @@
                             let totalHeight = null;
 
                             const detectedItems = order.items.map(i => ({ preset: detectPreset(i.name), qty: i.qty }));
-                            const hasAny = detectedItems.some(d => d.preset !== null);
+                            const hasAny = !manualOverride && detectedItems.some(d => d.preset !== null);
 
                             if (hasAny) {
                                 // น้ำหนัก: คำนวณแต่ละชิ้นตาม preset ของตัวเอง (ถ้าไม่รู้จักใช้ weightPerPiece)
@@ -326,6 +355,7 @@
                             };
                         });
                         setData(flashData);
+                        setSelectedRows(new Set(flashData.map((_, i) => i)));
                         setStatus("success");
                     } catch (err) { setErrorMsg(err.message); setStatus("error"); }
                 };
@@ -334,8 +364,9 @@
 
             const downloadExcel = () => {
                 const XLSX = window.XLSX;
+                const exportData = data.filter((_, i) => selectedRows.has(i));
                 // สร้าง worksheet จาก JSON โดยระบุลำดับ headers ที่เป๊ะที่สุด
-                const ws = XLSX.utils.json_to_sheet(data, { header: headersForExport });
+                const ws = XLSX.utils.json_to_sheet(exportData, { header: headersForExport });
                 
                 // ตรวจสอบและตั้งค่าประเภทข้อมูลใน Cell ให้เป็นแบบ 's' (string) สำหรับคอลัมน์ที่เป็นหัวข้อ
                 // เพื่อให้ระบบปลายทางไม่งงกับประเภทข้อมูล
@@ -363,14 +394,49 @@
                         </div>
 
                         {/* Preset Buttons */}
-                        <div className="bg-slate-100 px-8 py-4 flex items-center gap-3 border-b border-slate-200">
+                        <div className="bg-slate-100 px-8 py-4 flex flex-wrap items-center gap-4 border-b border-slate-200">
                             <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest shrink-0">Preset:</span>
-                            {productPresets.map((p, idx) => (
-                                <button key={idx} onClick={() => applyPreset(p)}
-                                    className="px-4 py-1.5 rounded-full text-sm font-bold border-2 border-yellow-400 bg-white text-slate-700 hover:bg-yellow-400 hover:text-slate-900 transition-all shadow-sm">
-                                    {p.label}
+                            {productPresets.map((p, idx) => {
+                                const isActive = manualOverride && settings.weightPerPiece === p.weight && settings.length === p.length;
+                                return (
+                                    <div key={idx} className="flex items-center gap-2 bg-white border-2 border-yellow-400 rounded-2xl px-3 py-1.5 shadow-sm">
+                                        <button onClick={() => applyPreset(p)}
+                                            className={`text-sm font-black shrink-0 transition-all ${isActive ? "text-yellow-500" : "text-slate-700 hover:text-yellow-500"}`}>
+                                            {p.label}
+                                        </button>
+                                        <span className="text-slate-200 text-xs">|</span>
+                                        <div className="flex items-center gap-1 text-[11px] text-slate-500 font-bold">
+                                            <input type="number" step="0.01" value={p.weight}
+                                                onChange={e => updatePreset(p.id, 'weight', parseFloat(e.target.value))}
+                                                className="w-10 text-center outline-none bg-transparent border-b border-slate-300 focus:border-yellow-400"
+                                                title="น้ำหนัก (กก.)" />
+                                            <span className="text-slate-300">kg</span>
+                                            <span className="text-slate-300 mx-0.5">|</span>
+                                            <input type="number" value={p.width}
+                                                onChange={e => updatePreset(p.id, 'width', parseInt(e.target.value))}
+                                                className="w-8 text-center outline-none bg-transparent border-b border-slate-300 focus:border-yellow-400"
+                                                title="กว้าง (ซม.)" />
+                                            <span className="text-slate-300">×</span>
+                                            <input type="number" value={p.length}
+                                                onChange={e => updatePreset(p.id, 'length', parseInt(e.target.value))}
+                                                className="w-8 text-center outline-none bg-transparent border-b border-slate-300 focus:border-yellow-400"
+                                                title="ยาว (ซม.)" />
+                                            <span className="text-slate-300">×</span>
+                                            <input type="number" value={p.height}
+                                                onChange={e => updatePreset(p.id, 'height', parseInt(e.target.value))}
+                                                className="w-8 text-center outline-none bg-transparent border-b border-slate-300 focus:border-yellow-400"
+                                                title="สูง/ชิ้น (ซม.)" />
+                                            <span className="text-slate-300">cm</span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {manualOverride && (
+                                <button onClick={clearOverride}
+                                    className="px-4 py-1.5 rounded-full text-sm font-bold border-2 border-slate-400 bg-white text-slate-500 hover:bg-slate-200 transition-all shadow-sm flex items-center gap-1">
+                                    <span>✕</span> Auto
                                 </button>
-                            ))}
+                            )}
                         </div>
 
                         {/* Settings */}
@@ -421,6 +487,9 @@
                                         <div className="flex flex-col sm:flex-row gap-4 w-full lg:w-auto z-10">
                                             <button onClick={downloadExcel} className="bg-yellow-400 text-slate-900 px-12 py-5 rounded-[1.5rem] font-black flex items-center justify-center gap-3 hover:bg-yellow-300 transition-all shadow-xl active:scale-95 text-lg uppercase">
                                                 DOWNLOAD EXCEL
+                                                {selectedRows.size < data.length && (
+                                                    <span className="bg-slate-900 text-yellow-400 text-xs font-black px-2 py-0.5 rounded-full">{selectedRows.size}/{data.length}</span>
+                                                )}
                                             </button>
                                             <button onClick={() => setStatus("idle")} className="bg-white/5 border-2 border-white/10 text-white px-8 py-5 rounded-[1.5rem] font-black hover:bg-white/10 transition-all">
                                                 รีเซ็ต
@@ -439,8 +508,15 @@
                                             <table className="text-left border-collapse table-fixed select-none" style={{ width: totalTableWidth }}>
                                                 <thead className="bg-slate-800 text-white text-[10px] font-black uppercase tracking-tighter sticky top-0 z-40">
                                                     <tr>
-                                                        <th className="p-4 sticky left-0 z-50 bg-slate-950 border-r-2 border-slate-600" style={{ width: colWidths[0] }}>
-                                                            ลำดับ
+                                                        <th className="p-4 sticky left-0 z-50 bg-slate-950 border-r-2 border-slate-600 text-center" style={{ width: colWidths[0] }}>
+                                                            <div className="flex flex-col items-center gap-1">
+                                                                <input type="checkbox"
+                                                                    checked={data && selectedRows.size === data.length}
+                                                                    onChange={e => setSelectedRows(e.target.checked ? new Set(data.map((_,i)=>i)) : new Set())}
+                                                                    className="w-4 h-4 accent-yellow-400 cursor-pointer"
+                                                                />
+                                                                <span className="text-[9px] text-slate-400 uppercase tracking-widest">ทั้งหมด</span>
+                                                            </div>
                                                             <div onMouseDown={(e) => onResizeStart(0, e)} className="resize-handle" />
                                                         </th>
                                                         {headersForExport.map((h, i) => {
@@ -472,8 +548,19 @@
                                                         const frozenBg = isEven ? "bg-slate-100" : "bg-slate-200";
                                                         return (
                                                             <tr key={rowIndex} className={`${isEven ? 'bg-white' : 'bg-slate-50'} border-b hover:bg-yellow-50 transition-colors group`}>
-                                                                <td className={`p-4 text-center font-black text-slate-500 border-r-2 border-slate-200 sticky left-0 z-10 ${frozenBg} group-hover:bg-yellow-100`}>
-                                                                    {rowIndex + 1}
+                                                                <td className={`p-2 text-center border-r-2 border-slate-200 sticky left-0 z-10 ${frozenBg} group-hover:bg-yellow-100`}>
+                                                                    <div className="flex flex-col items-center gap-1">
+                                                                        <input type="checkbox"
+                                                                            checked={selectedRows.has(rowIndex)}
+                                                                            onChange={e => {
+                                                                                const next = new Set(selectedRows);
+                                                                                e.target.checked ? next.add(rowIndex) : next.delete(rowIndex);
+                                                                                setSelectedRows(next);
+                                                                            }}
+                                                                            className="w-4 h-4 accent-yellow-400 cursor-pointer"
+                                                                        />
+                                                                        <span className="text-[10px] font-black text-slate-400">{rowIndex + 1}</span>
+                                                                    </div>
                                                                 </td>
                                                                 {headersForExport.map((h, i) => {
                                                                     let stickyStyle = {};
