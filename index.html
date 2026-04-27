@@ -54,14 +54,30 @@
             const startX = useRef(0);
             const startWidth = useRef(0);
 
+            const productPresets = [
+                { label: "กางเกง", weight: 0.5, length: 32, width: 25, height: 5, itemType: "เสื้อผ้า", productType: "Standard" },
+                { label: "เข็มขัด", weight: 0.2, length: 15, width: 15, height: 5, itemType: "เสื้อผ้า", productType: "Standard" },
+            ];
+
             const [settings, setSettings] = useState({
-                weightPerPiece: 0.4,
-                length: 25,
+                weightPerPiece: 0.5,
+                length: 32,
                 width: 25,
-                heightPerPiece: 3,
+                heightPerPiece: 5,
                 itemType: "เสื้อผ้า",
                 productType: "Standard"
             });
+
+            const applyPreset = (preset) => {
+                setSettings({
+                    weightPerPiece: preset.weight,
+                    length: preset.length,
+                    width: preset.width,
+                    heightPerPiece: preset.height,
+                    itemType: preset.itemType,
+                    productType: preset.productType
+                });
+            };
 
             // หัวตารางเป๊ะตามต้นแบบ (ใช้ \r\n เพื่อความเข้ากันได้สูงสุดกับ Excel/Flash Portal)
             const headersForExport = [
@@ -175,8 +191,58 @@
                             });
                         });
 
+                        // ตาราง preset สินค้า (ชื่อสินค้าใช้ keyword matching)
+                        const PRODUCT_PRESETS = [
+                            { keywords: ["กางเกง"], weight: 0.5, length: 32, width: 25, height: 5, priority: 1 },
+                            { keywords: ["เข็มขัด"], weight: 0.2, length: 15, width: 15, height: 5, priority: 0 },
+                        ];
+
+                        const detectPreset = (name) => {
+                            const n = name.toLowerCase();
+                            return PRODUCT_PRESETS.find(p => p.keywords.some(k => n.includes(k))) || null;
+                        };
+
                         const flashData = Object.values(groupedOrders).map(order => {
                             const totalQty = order.items.reduce((sum, item) => sum + item.qty, 0);
+
+                            // --- Auto-detect dimensions & weight per order ---
+                            let pkg = { length: settings.length, width: settings.width, heightPerPiece: settings.heightPerPiece, itemType: settings.itemType, productType: settings.productType };
+                            let totalWeight = null;
+                            let totalHeight = null;
+
+                            const detectedItems = order.items.map(i => ({ preset: detectPreset(i.name), qty: i.qty }));
+                            const hasAny = detectedItems.some(d => d.preset !== null);
+
+                            if (hasAny) {
+                                // น้ำหนัก: คำนวณแต่ละชิ้นตาม preset ของตัวเอง (ถ้าไม่รู้จักใช้ weightPerPiece)
+                                totalWeight = detectedItems.reduce((sum, d) => {
+                                    const w = d.preset ? d.preset.weight : settings.weightPerPiece;
+                                    return sum + w * d.qty;
+                                }, 0);
+
+                                totalHeight = detectedItems.reduce((sum, d) => {
+                                    const h = d.preset ? d.preset.height : settings.heightPerPiece;
+                                    return sum + h * d.qty;
+                                }, 0);
+
+                                // ขนาดกล่อง: ใช้ preset priority สูงสุดที่มีใน order
+                                const bestPreset = detectedItems
+                                    .filter(d => d.preset !== null)
+                                    .map(d => d.preset)
+                                    .sort((a, b) => b.priority - a.priority)[0];
+
+                                pkg = {
+                                    length: bestPreset.length,
+                                    width: bestPreset.width,
+                                    heightPerPiece: bestPreset.height,
+                                    itemType: bestPreset.itemType || settings.itemType,
+                                    productType: bestPreset.productType || settings.productType
+                                };
+                            }
+
+                            const exportWeight = totalWeight !== null ? totalWeight.toFixed(2) : (settings.weightPerPiece * totalQty).toFixed(2);
+                            const exportHeight = totalHeight !== null ? totalHeight : (pkg.heightPerPiece * totalQty);
+                            // --- end auto-detect ---
                             
                             // 1. Customer Order Number: ใช้รหัสสินค้า 3 ตัวหน้า (จำกัด 64 ตัวอักษร)
                             const colorAbbr = {
@@ -245,15 +311,15 @@
                                 [headersForExport[3]]: postalCode,
                                 [headersForExport[4]]: order.phone,
                                 [headersForExport[5]]: "",
-                                [headersForExport[6]]: settings.itemType,
-                                [headersForExport[7]]: (settings.weightPerPiece * totalQty).toFixed(2),
-                                [headersForExport[8]]: settings.length,
-                                [headersForExport[9]]: settings.width,
-                                [headersForExport[10]]: (settings.heightPerPiece * totalQty),
+                                [headersForExport[6]]: pkg.itemType,
+                                [headersForExport[7]]: exportWeight,
+                                [headersForExport[8]]: pkg.length,
+                                [headersForExport[9]]: pkg.width,
+                                [headersForExport[10]]: exportHeight,
                                 [headersForExport[11]]: "N",
                                 [headersForExport[12]]: order.total,
                                 [headersForExport[13]]: "N",
-                                [headersForExport[14]]: settings.productType,
+                                [headersForExport[14]]: pkg.productType,
                                 [headersForExport[15]]: remarkFull,
                                 [headersForExport[16]]: "",
                                 [headersForExport[17]]: ""
@@ -294,6 +360,17 @@
                         <div className="bg-yellow-400 p-8 text-center border-b border-yellow-500 shadow-sm">
                             <h1 className="text-3xl font-black text-slate-900 uppercase italic">Flash Converter <span className="text-white drop-shadow-md">PRO</span></h1>
                             <p className="text-yellow-900 font-bold text-sm mt-1 uppercase tracking-widest opacity-80 text-center text-balance">แก้ไขปัญหาหัวตาราง (Excel Native Support) - ไม่ต้องดับเบิลคลิกก่อนใช้</p>
+                        </div>
+
+                        {/* Preset Buttons */}
+                        <div className="bg-slate-100 px-8 py-4 flex items-center gap-3 border-b border-slate-200">
+                            <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest shrink-0">Preset:</span>
+                            {productPresets.map((p, idx) => (
+                                <button key={idx} onClick={() => applyPreset(p)}
+                                    className="px-4 py-1.5 rounded-full text-sm font-bold border-2 border-yellow-400 bg-white text-slate-700 hover:bg-yellow-400 hover:text-slate-900 transition-all shadow-sm">
+                                    {p.label}
+                                </button>
+                            ))}
                         </div>
 
                         {/* Settings */}
