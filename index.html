@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flash Converter Pro - Standalone</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel CDN for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- SheetJS CDN -->
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Anuphan:wght@300;400;600;700&display=swap');
+        body { font-family: 'Anuphan', sans-serif; cursor: default; }
+        .resize-handle { width: 6px; cursor: col-resize; position: absolute; right: 0; top: 0; bottom: 0; z-index: 10; transition: background 0.2s; }
+        .resize-handle:hover { background: #fbbf24; }
+        textarea::-webkit-scrollbar { width: 4px; height: 4px; }
+        textarea::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .select-none { user-select: none; }
+        .grab-cursor { cursor: grab; }
+        .grabbing-cursor { cursor: grabbing !important; }
+        thead.sticky-header th { position: sticky; top: 0; z-index: 40; }
+    </style>
+</head>
+<body class="bg-slate-100 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect, useCallback } = React;
+
+        const App = () => {
+            const [data, setData] = useState(null);
+            const [fileName, setFileName] = useState("");
+            const [status, setStatus] = useState("idle");
+            const [errorMsg, setErrorMsg] = useState("");
+            
+            const fileInputRef = useRef(null);
+            const tableContainerRef = useRef(null);
+            const topScrollRef = useRef(null);
+            const isSyncingScroll = useRef(false);
+            const isDragging = useRef(false);
+            const lastMouseX = useRef(0);
+
+            // ระบบ Resize คอลัมน์
+            const [colWidths, setColWidths] = useState([60, 300, 200, 450, 100, 130, 130, 120, 100, 80, 80, 80, 100, 130, 100, 150, 800, 150, 150]);
+            const isResizing = useRef(-1);
+            const startX = useRef(0);
+            const startWidth = useRef(0);
+
+            const [settings, setSettings] = useState({
+                weightPerPiece: 0.4,
+                length: 25,
+                width: 25,
+                heightPerPiece: 3,
+                itemType: "เสื้อผ้า",
+                productType: "Standard"
+            });
+
+            // หัวตารางเป๊ะตามต้นแบบ (ใช้ \r\n เพื่อความเข้ากันได้สูงสุดกับ Excel/Flash Portal)
+            const headersForExport = [
+                "Customer_order_number\r\n(เลขออเดอร์ของลูกค้า)",
+                "*Consignee_name\r\n(ชื่อผู้รับ)",
+                "*Address\r\n(ทิ่อยู่)",
+                "*Postal_code\r\n(รหัสไปรษณีย์)",
+                "*Phone_number\r\n(เบอร์โทรศัพท์)",
+                "Phone_number2\r\n(เบอร์โทรศัพท์)",
+                "Item_type\r\n(ประเภทสินค้า)",
+                "*Weight_kg\r\n(น้ำหนัก)",
+                "*Length\r\n(ยาว)",
+                "*Width\r\n(กว้าง)",
+                "*Height\r\n(สูง)",
+                "Flash_care",
+                "Declared_value\r\n(มูลค่าสินค้าที่ระบุโดยลูกค้า)",
+                "Box_shield",
+                "*Product_type         (ประเภทสินค้า）", // 9 spaces + full-width bracket
+                "Remark1\r\n(หมายเหตุ1)",
+                "Remark2\r\n(หมายเหตุ2)",
+                "Remark3\r\n(หมายเหตุ3)"
+            ];
+
+            const totalTableWidth = colWidths.reduce((a, b) => a + b, 0);
+
+            const handleScrollSync = (source) => {
+                if (isSyncingScroll.current) return;
+                isSyncingScroll.current = true;
+                if (source === 'top' && tableContainerRef.current) {
+                    tableContainerRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+                } else if (source === 'table' && topScrollRef.current) {
+                    topScrollRef.current.scrollLeft = tableContainerRef.current.scrollLeft;
+                }
+                setTimeout(() => { isSyncingScroll.current = false; }, 10);
+            };
+
+            const handleMouseDown = (e) => {
+                if (e.target.tagName === 'TEXTAREA' || e.target.classList.contains('resize-handle')) return;
+                isDragging.current = true;
+                lastMouseX.current = e.pageX;
+                document.body.classList.add('grabbing-cursor');
+            };
+
+            const handleGlobalMouseMove = useCallback((e) => {
+                if (isResizing.current !== -1) {
+                    const diff = e.pageX - startX.current;
+                    const newWidths = [...colWidths];
+                    newWidths[isResizing.current] = Math.max(50, startWidth.current + diff);
+                    setColWidths(newWidths);
+                    return;
+                }
+                if (isDragging.current && tableContainerRef.current) {
+                    const diff = e.pageX - lastMouseX.current;
+                    tableContainerRef.current.scrollLeft -= diff;
+                    lastMouseX.current = e.pageX;
+                }
+            }, [colWidths]);
+
+            const handleGlobalMouseUp = useCallback(() => {
+                isDragging.current = false;
+                isResizing.current = -1;
+                document.body.classList.remove('grabbing-cursor');
+            }, []);
+
+            useEffect(() => {
+                document.addEventListener('mousemove', handleGlobalMouseMove);
+                document.addEventListener('mouseup', handleGlobalMouseUp);
+                return () => {
+                    document.removeEventListener('mousemove', handleGlobalMouseMove);
+                    document.removeEventListener('mouseup', handleGlobalMouseUp);
+                };
+            }, [handleGlobalMouseMove, handleGlobalMouseUp]);
+
+            const onResizeStart = (index, e) => {
+                e.stopPropagation();
+                isResizing.current = index;
+                startX.current = e.pageX;
+                startWidth.current = colWidths[index];
+            };
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                setFileName(file.name);
+                setStatus("processing");
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    try {
+                        const bstr = evt.target.result;
+                        const wb = XLSX.read(bstr, { type: 'binary' });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const rawData = XLSX.utils.sheet_to_json(ws);
+                        const groupedOrders = {};
+                        
+                        rawData.forEach(row => {
+                            const orderNo = row["No."] || row["เลขที่"] || row["เลขที่ออเดอร์"] || "N/A";
+                            if (!groupedOrders[orderNo]) {
+                                groupedOrders[orderNo] = {
+                                    no: orderNo, 
+                                    customerName: row["Customer Name"] || row["ชื่อลูกค้า"] || row["ชื่อผู้รับ"] || "",
+                                    phone: String(row["Customer Phone"] || row["เบอร์โทรศัพท์"] || "").replace(/'/g, ""),
+                                    address: row["Customer Address"] || row["ที่อยู่"] || "",
+                                    total: parseFloat(row["Total"] || row["ยอดรวม"] || 0), 
+                                    items: []
+                                };
+                            }
+                            groupedOrders[orderNo].items.push({
+                                name: row["Item Name"] || row["ชื่อสินค้า"] || "", 
+                                variant: row["Variant Name"] || row["ตัวเลือกสินค้า"] || "",
+                                qty: parseInt(row["Item Qty"] || row["จำนวน"] || 1)
+                            });
+                        });
+
+                        const flashData = Object.values(groupedOrders).map(order => {
+                            const totalQty = order.items.reduce((sum, item) => sum + item.qty, 0);
+                            
+                            // 1. Customer Order Number: ใช้รหัสสินค้า 3 ตัวหน้า (จำกัด 64 ตัวอักษร)
+                            const orderParts = order.items.map(i => {
+                                const productCode = String(i.name).substring(0, 3).trim();
+                                const variantStr = i.variant ? `-${i.variant}` : "";
+                                return `${i.qty} = ${productCode}${variantStr}`;
+                            });
+                            let orderInfoStr = `${order.no} | ${orderParts.join(" | ")}`;
+                            if (orderInfoStr.length > 64) orderInfoStr = orderInfoStr.substring(0, 64);
+
+                            // 2. Remark1: ใช้ชื่อสินค้าเต็มรูปแบบ
+                            const remarkFull = order.items.map(i => {
+                                const variantStr = i.variant ? ` (${i.variant})` : "";
+                                return `จำนวน ${i.qty} ชิ้น | ${i.name}${variantStr}`;
+                            }).join(", ");
+
+                            const postalCode = (order.address.match(/\d{5}$/) || [""])[0];
+
+                            return {
+                                [headersForExport[0]]: orderInfoStr,
+                                [headersForExport[1]]: order.customerName,
+                                [headersForExport[2]]: order.address,
+                                [headersForExport[3]]: postalCode,
+                                [headersForExport[4]]: order.phone,
+                                [headersForExport[5]]: "",
+                                [headersForExport[6]]: settings.itemType,
+                                [headersForExport[7]]: (settings.weightPerPiece * totalQty).toFixed(2),
+                                [headersForExport[8]]: settings.length,
+                                [headersForExport[9]]: settings.width,
+                                [headersForExport[10]]: (settings.heightPerPiece * totalQty),
+                                [headersForExport[11]]: "N",
+                                [headersForExport[12]]: order.total,
+                                [headersForExport[13]]: "N",
+                                [headersForExport[14]]: settings.productType,
+                                [headersForExport[15]]: remarkFull,
+                                [headersForExport[16]]: "",
+                                [headersForExport[17]]: ""
+                            };
+                        });
+                        setData(flashData);
+                        setStatus("success");
+                    } catch (err) { setErrorMsg(err.message); setStatus("error"); }
+                };
+                reader.readAsBinaryString(file);
+            };
+
+            const downloadExcel = () => {
+                const XLSX = window.XLSX;
+                // สร้าง worksheet จาก JSON โดยระบุลำดับ headers ที่เป๊ะที่สุด
+                const ws = XLSX.utils.json_to_sheet(data, { header: headersForExport });
+                
+                // ตรวจสอบและตั้งค่าประเภทข้อมูลใน Cell ให้เป็นแบบ 's' (string) สำหรับคอลัมน์ที่เป็นหัวข้อ
+                // เพื่อให้ระบบปลายทางไม่งงกับประเภทข้อมูล
+                const range = XLSX.utils.decode_range(ws['!ref']);
+                for (let C = range.s.c; C <= range.e.c; ++C) {
+                    const address = XLSX.utils.encode_col(C) + "1";
+                    if (!ws[address]) continue;
+                    ws[address].t = 's'; // Force Text Type
+                }
+
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Order Template");
+                
+                // เขียนไฟล์ในรูปแบบ XLSX มาตรฐาน
+                XLSX.writeFile(wb, `Flash_Order_Template_${new Date().getTime()}.xlsx`, { bookSST: true, type: 'binary' });
+            };
+
+            return (
+                <div className="p-4 md:p-8 flex flex-col items-center">
+                    <div className="max-w-full w-full bg-white rounded-[2.5rem] shadow-2xl overflow-hidden border border-slate-200">
+                        {/* Header */}
+                        <div className="bg-yellow-400 p-8 text-center border-b border-yellow-500 shadow-sm">
+                            <h1 className="text-3xl font-black text-slate-900 uppercase italic">Flash Converter <span className="text-white drop-shadow-md">PRO</span></h1>
+                            <p className="text-yellow-900 font-bold text-sm mt-1 uppercase tracking-widest opacity-80 text-center text-balance">แก้ไขปัญหาหัวตาราง (Excel Native Support) - ไม่ต้องดับเบิลคลิกก่อนใช้</p>
+                        </div>
+
+                        {/* Settings */}
+                        <div className="bg-slate-50 p-8 grid grid-cols-2 md:grid-cols-4 gap-6 border-b border-slate-200 shadow-inner">
+                            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                                <label className="block text-[10px] text-slate-400 font-black uppercase mb-1">น้ำหนัก / ชิ้น (กก.)</label>
+                                <input type="number" step="0.01" value={settings.weightPerPiece} onChange={e => setSettings({...settings, weightPerPiece: parseFloat(e.target.value)})} className="w-full text-lg font-bold outline-none text-slate-700"/>
+                            </div>
+                            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                                <label className="block text-[10px] text-slate-400 font-black uppercase mb-1">ส่วนสูง / ชิ้น (ซม.)</label>
+                                <input type="number" value={settings.heightPerPiece} onChange={e => setSettings({...settings, heightPerPiece: parseInt(e.target.value)})} className="w-full text-lg font-bold outline-none text-slate-700"/>
+                            </div>
+                            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                                <label className="block text-[10px] text-slate-400 font-black uppercase mb-1">ขนาด (กว้าง x ยาว)</label>
+                                <div className="flex items-center gap-2 font-bold text-slate-700">
+                                    <input type="number" value={settings.width} onChange={e => setSettings({...settings, width: parseInt(e.target.value)})} className="w-full outline-none"/>
+                                    <span className="text-slate-300">x</span>
+                                    <input type="number" value={settings.length} onChange={e => setSettings({...settings, length: parseInt(e.target.value)})} className="w-full outline-none"/>
+                                </div>
+                            </div>
+                            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                                <label className="block text-[10px] text-slate-400 font-black mb-2 uppercase">รูปแบบขนส่ง</label>
+                                <select value={settings.productType} onChange={e => setSettings({...settings, productType: e.target.value})} className="w-full font-bold outline-none text-slate-700 bg-transparent">
+                                    <option value="Standard">Standard</option>
+                                    <option value="Bulky">Bulky</option>
+                                    <option value="Fruit Express">Fruit Express</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="p-8">
+                            {status === "idle" && (
+                                <div onClick={() => fileInputRef.current.click()} className="border-4 border-dashed border-slate-200 rounded-[3rem] p-24 text-center hover:border-yellow-400 hover:bg-yellow-50/50 transition-all cursor-pointer group shadow-inner">
+                                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept=".xlsx,.xls,.csv"/>
+                                    <h3 className="text-slate-800 font-black text-2xl tracking-tighter uppercase">อัปโหลดไฟล์ที่นี่</h3>
+                                    <p className="text-slate-400 text-sm font-medium mt-2">ไฟล์ที่ดาวน์โหลดจะได้รับการปรับปรุง Format ให้ระบบ Portal อ่านได้ทันที</p>
+                                </div>
+                            )}
+
+                            {status === "success" && (
+                                <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 space-y-6">
+                                    <div className="flex flex-col lg:flex-row items-center gap-8 bg-slate-900 rounded-[2.5rem] p-10 shadow-2xl relative overflow-hidden sticky top-4 z-50">
+                                        <div className="absolute top-0 right-0 w-64 h-64 bg-yellow-400/10 rounded-full blur-3xl -mr-20 -mt-20"></div>
+                                        <div className="text-center lg:text-left flex-1 z-10 text-white">
+                                            <h3 className="font-black text-3xl tracking-tight mb-1 uppercase italic">Excel Updated!</h3>
+                                            <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">ข้อมูลได้รับการปรับปรุง Header Format ให้เป็นมาตรฐาน Excel แท้</p>
+                                        </div>
+                                        <div className="flex flex-col sm:flex-row gap-4 w-full lg:w-auto z-10">
+                                            <button onClick={downloadExcel} className="bg-yellow-400 text-slate-900 px-12 py-5 rounded-[1.5rem] font-black flex items-center justify-center gap-3 hover:bg-yellow-300 transition-all shadow-xl active:scale-95 text-lg uppercase">
+                                                DOWNLOAD EXCEL
+                                            </button>
+                                            <button onClick={() => setStatus("idle")} className="bg-white/5 border-2 border-white/10 text-white px-8 py-5 rounded-[1.5rem] font-black hover:bg-white/10 transition-all">
+                                                รีเซ็ต
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Top Scroll */}
+                                    <div ref={topScrollRef} onScroll={() => handleScrollSync('top')} className="overflow-x-auto h-3 bg-slate-200 rounded-full mb-2 border border-slate-300">
+                                        <div style={{ width: totalTableWidth, height: '1px' }}></div>
+                                    </div>
+
+                                    {/* Table */}
+                                    <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-inner overflow-hidden relative">
+                                        <div ref={tableContainerRef} onScroll={() => handleScrollSync('table')} onMouseDown={handleMouseDown} className="overflow-x-auto grab-cursor">
+                                            <table className="text-left border-collapse table-fixed select-none" style={{ width: totalTableWidth }}>
+                                                <thead className="bg-slate-800 text-white text-[10px] font-black uppercase tracking-tighter sticky top-0 z-40">
+                                                    <tr>
+                                                        <th className="p-4 sticky left-0 z-50 bg-slate-950 border-r-2 border-slate-600" style={{ width: colWidths[0] }}>
+                                                            ลำดับ
+                                                            <div onMouseDown={(e) => onResizeStart(0, e)} className="resize-handle" />
+                                                        </th>
+                                                        {headersForExport.map((h, i) => {
+                                                            const colIdx = i + 1;
+                                                            let stickyStyle = {};
+                                                            let borderClass = "";
+                                                            let bgClass = "bg-slate-800";
+                                                            if (i === 0) {
+                                                                stickyStyle = { position: 'sticky', left: colWidths[0], zIndex: 50 };
+                                                                bgClass = "bg-slate-900";
+                                                                borderClass = "border-r-2 border-slate-600";
+                                                            } else if (i === 1) {
+                                                                stickyStyle = { position: 'sticky', left: colWidths[0] + colWidths[1], zIndex: 50 };
+                                                                bgClass = "bg-slate-900";
+                                                                borderClass = "border-r-2 border-slate-400 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.3)]";
+                                                            }
+                                                            return (
+                                                                <th key={i} className={`p-4 whitespace-pre relative ${bgClass} ${borderClass}`} style={{ width: colWidths[colIdx], ...stickyStyle }}>
+                                                                    {h}
+                                                                    <div onMouseDown={(e) => onResizeStart(colIdx, e)} className="resize-handle" />
+                                                                </th>
+                                                            );
+                                                        })}
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="text-xs">
+                                                    {data.map((row, rowIndex) => {
+                                                        const isEven = rowIndex % 2 === 0;
+                                                        const frozenBg = isEven ? "bg-slate-100" : "bg-slate-200";
+                                                        return (
+                                                            <tr key={rowIndex} className={`${isEven ? 'bg-white' : 'bg-slate-50'} border-b hover:bg-yellow-50 transition-colors group`}>
+                                                                <td className={`p-4 text-center font-black text-slate-500 border-r-2 border-slate-200 sticky left-0 z-10 ${frozenBg} group-hover:bg-yellow-100`}>
+                                                                    {rowIndex + 1}
+                                                                </td>
+                                                                {headersForExport.map((h, i) => {
+                                                                    let stickyStyle = {};
+                                                                    let borderClass = "border-r border-slate-100";
+                                                                    let currentCellBg = isEven ? "bg-white" : "bg-slate-50";
+                                                                    if (i === 0) {
+                                                                        stickyStyle = { position: 'sticky', left: colWidths[0], zIndex: 10 };
+                                                                        borderClass = "border-r-2 border-slate-200";
+                                                                        currentCellBg = frozenBg;
+                                                                    } else if (i === 1) {
+                                                                        stickyStyle = { position: 'sticky', left: colWidths[0] + colWidths[1], zIndex: 10 };
+                                                                        borderClass = "border-r-2 border-slate-300 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)]";
+                                                                        currentCellBg = frozenBg;
+                                                                    }
+                                                                    const content = String(row[h] ?? "");
+                                                                    const lineCount = content.split('\n').length;
+                                                                    const dynamicRows = i === 0 ? Math.max(1, Math.min(lineCount, 8)) : (i === 2 || i === 15 ? 2 : 1);
+                                                                    return (
+                                                                        <td key={i} className={`p-1 ${borderClass} ${currentCellBg} group-hover:bg-yellow-100`} style={stickyStyle}>
+                                                                            <textarea 
+                                                                                value={content} 
+                                                                                onChange={(e) => {
+                                                                                    const newData = [...data];
+                                                                                    newData[rowIndex][h] = e.target.value;
+                                                                                    setData(newData);
+                                                                                }}
+                                                                                rows={i === 15 ? 1 : dynamicRows}
+                                                                                className={`w-full bg-transparent p-1 outline-none focus:bg-white rounded-lg resize-none font-medium text-slate-600 transition-all group-hover:text-slate-900 ${i === 0 || i === 15 ? "font-bold" : ""} ${i === 15 ? "whitespace-nowrap overflow-x-auto" : ""}`}
+                                                                                style={i === 15 ? { overflowWrap: 'normal', overflowX: 'auto' } : {}}
+                                                                            />
+                                                                        </td>
+                                                                    );
+                                                                })}
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+        setTimeout(() => { if(window.lucide) window.lucide.createIcons(); }, 500);
+    </script>
+</body>
+</html>
