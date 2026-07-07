@@ -404,7 +404,7 @@ const App = () => {
                     .trim();
                 const addrWithCode = `${strippedAddr} (${orderInfoStr})`;
                 return {
-                    [HEADERS[0]]: order.customerName,
+                    [HEADERS[0]]: `${order.no} ${order.customerName}`,
                     [HEADERS[1]]: order.phone,
                     [HEADERS[2]]: parsed.province,
                     [HEADERS[3]]: parsed.district,
@@ -424,8 +424,8 @@ const App = () => {
 
             // Flash format
             return {
-                [HEADERS[0]]: orderInfoStr,
-                [HEADERS[1]]: order.customerName,
+                [HEADERS[0]]: "",
+                [HEADERS[1]]: `${order.no} ${order.customerName}`,
                 [HEADERS[2]]: cleanedAddr,
                 [HEADERS[3]]: postalCode,
                 [HEADERS[4]]: order.phone,
