@@ -44,6 +44,13 @@ const App = () => {
     };
     const [rawOrders, setRawOrders] = useState(null); // เก็บ orders ดิบไว้ regenerate ตอนสลับแท็บ
 
+    // ── J&T tracking matcher (จับคู่เลขพัสดุ ↔ ออเดอร์) ────────────
+    const [trackingRows, setTrackingRows] = useState(null); // [{ order, tracking, name }]
+    const [trackingFileName, setTrackingFileName] = useState("");
+    const [trackingError, setTrackingError] = useState("");
+    const [copiedKey, setCopiedKey] = useState(null);
+    const trackingInputRef = useRef(null);
+
     // ── Headers & ColWidths per carrier ──────────────────────────
     const FLASH_HEADERS = [
         "Customer_order_number\r\n(เลขออเดอร์ของลูกค้า)",
@@ -499,6 +506,84 @@ const App = () => {
         reader.readAsBinaryString(file);
     };
 
+    // ── J&T tracking matcher: อ่านไฟล์ "รายการพัสดุ" แล้วจับคู่ ────
+    const handleTrackingUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setTrackingFileName(file.name);
+        setTrackingError("");
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+            try {
+                const wb = XLSX.read(evt.target.result, { type: 'binary' });
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                const rows = XLSX.utils.sheet_to_json(ws, { defval: "", raw: false });
+                if (!rows.length) { setTrackingError("ไฟล์ว่างเปล่า"); setTrackingRows(null); return; }
+
+                // หา key ของคอลัมน์แบบยืดหยุ่น (กันหัวตารางมีช่องว่าง/ตัวแปร)
+                // ค้นตามลำดับความสำคัญของคำค้น (คำเจาะจงก่อน) เพื่อไม่ให้ "ที่อยู่" ไปโดน "ที่อยู่ผู้ส่ง"
+                const keys = Object.keys(rows[0]);
+                const norm = (s) => String(s).replace(/\s/g, "").toLowerCase();
+                const findKey = (...cands) => {
+                    for (const c of cands) {
+                        const hit = keys.find(k => norm(k).includes(norm(c)));
+                        if (hit) return hit;
+                    }
+                    return undefined;
+                };
+                const kTrack = findKey("หมายเลขพัสดุ", "เลขพัสดุ", "trackingnumber", "tracking");
+                const kAddr  = findKey("ที่อยู่ผู้รับ", "ที่อยู่ปลายทาง");
+                const kName  = findKey("ชื่อสกุลผู้รับ", "ชื่อผู้รับ", "ผู้รับ");
+                if (!kTrack) {
+                    setTrackingError("ไม่พบคอลัมน์ 'หมายเลขพัสดุ' — ตรวจสอบว่าเป็นไฟล์รายการพัสดุที่ส่งออกจาก J&T");
+                    setTrackingRows(null);
+                    return;
+                }
+
+                const byOrder = {}; // orderNo -> { order, tracking, name }
+                rows.forEach(r => {
+                    const tracking = String(r[kTrack] || "").trim();
+                    const addr = String(kAddr ? r[kAddr] : "");
+                    const rawName = String(kName ? r[kName] : "").trim();
+                    // เลขออเดอร์: 1) จากวงเล็บในที่อยู่ "(75200 | ...)"  2) จาก prefix หน้าชื่อ "75200 ..."
+                    let order = "";
+                    const m = addr.match(/\(\s*([^|()]+?)\s*\|/);
+                    if (m) order = m[1].trim();
+                    if (!order) { const nm = rawName.match(/^\s*(\d{2,})\b/); if (nm) order = nm[1]; }
+                    if (!order) order = "-";
+                    const name = rawName.replace(/^\s*\d{2,}\s+/, ""); // ตัดเลขออเดอร์ที่นำหน้าชื่อออก (ถ้ามี)
+                    // ตัดแถวซ้ำ: 1 ออเดอร์ = 1 แถว, เลือกเลขพัสดุจากแถว "หลังสุดที่มีเลขพัสดุ"
+                    // (ถ้ามีทั้งแถวที่พิมพ์แล้วและยังไม่พิมพ์ จะได้เลขพัสดุจากแถวที่พิมพ์แล้ว)
+                    if (!byOrder[order] || tracking) {
+                        byOrder[order] = { order, tracking, name };
+                    }
+                });
+
+                const list = Object.values(byOrder).sort((a, b) => {
+                    const na = parseInt(a.order, 10), nb = parseInt(b.order, 10);
+                    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                    return String(a.order).localeCompare(String(b.order));
+                });
+                setTrackingRows(list);
+            } catch (err) { setTrackingError(err.message); setTrackingRows(null); }
+        };
+        reader.readAsBinaryString(file);
+    };
+
+    const copyText = (text, key) => {
+        const done = () => { setCopiedKey(key); setTimeout(() => setCopiedKey(k => k === key ? null : k), 1200); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+        } else { fallbackCopy(text, done); }
+    };
+    const fallbackCopy = (text, done) => {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta); done();
+    };
+
     // ── Validation per row (ตรวจปัญหาที่อาจทำให้นำเข้าไม่สำเร็จ) ──
     const validateRow = (row, carrierKey) => {
         const issues = [];
@@ -841,6 +926,97 @@ const App = () => {
                         </div>
                     )}
                 </div>
+
+                {/* ── J&T Tracking Matcher (จับคู่เลขพัสดุ ↔ ออเดอร์) ── */}
+                {carrier === "jt" && (
+                    <div className="px-8 pb-10 border-t border-slate-200 pt-8 bg-slate-50">
+                        <div className="bg-gradient-to-br from-red-50 to-white border-2 border-red-100 rounded-[2.5rem] p-8 shadow-inner">
+                            <div className="flex items-center gap-3 mb-1">
+                                <span className="text-3xl">🔍</span>
+                                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">จับคู่เลขพัสดุ J&amp;T ↔ ออเดอร์</h2>
+                            </div>
+                            <p className="text-slate-500 text-sm font-medium mb-6">อัปโหลดไฟล์ "รายการพัสดุ" ที่ส่งออกจากระบบ J&amp;T ระบบจะดึงเลขพัสดุมาจับคู่กับเลขออเดอร์ให้อัตโนมัติ (เรียงตามเลขออเดอร์)</p>
+
+                            <div className="flex flex-wrap items-center gap-3 mb-6">
+                                <input type="file" ref={trackingInputRef} onChange={handleTrackingUpload} className="hidden" accept=".xlsx,.xls,.csv" />
+                                <button onClick={() => trackingInputRef.current.click()} className="px-6 py-3 rounded-2xl bg-red-500 text-white font-black hover:bg-red-400 transition-all shadow-lg active:scale-95 flex items-center gap-2">
+                                    <span className="text-lg">📤</span> อัปโหลดไฟล์รายการพัสดุ
+                                </button>
+                                {trackingFileName && <span className="text-sm text-slate-500 font-bold">{trackingFileName}</span>}
+                                {trackingRows && (
+                                    <button onClick={() => { setTrackingRows(null); setTrackingFileName(""); setTrackingError(""); if (trackingInputRef.current) trackingInputRef.current.value = ""; }} className="px-4 py-2 rounded-xl border-2 border-slate-300 text-slate-500 font-bold hover:bg-slate-100 transition-all text-sm">ล้าง</button>
+                                )}
+                            </div>
+
+                            {trackingError && (
+                                <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 text-amber-800 font-bold text-sm flex items-center gap-2">
+                                    <span className="text-xl">⚠️</span> {trackingError}
+                                </div>
+                            )}
+
+                            {trackingRows && (() => {
+                                const matched = trackingRows.filter(r => r.tracking);
+                                const pending = trackingRows.length - matched.length;
+                                const allTracks = matched.map(r => r.tracking).join("\n");
+                                const allTsv = matched.map(r => `${r.order}\t${r.tracking}`).join("\n");
+                                return (
+                                  <div className="space-y-4">
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <div className="bg-white border border-slate-200 rounded-xl px-4 py-2 shadow-sm">
+                                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">ทั้งหมด </span>
+                                            <b className="text-slate-800">{trackingRows.length}</b>
+                                            <span className="text-slate-300 mx-1">·</span>
+                                            <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">มีเลขพัสดุ </span>
+                                            <b className="text-emerald-600">{matched.length}</b>
+                                            {pending > 0 && <React.Fragment><span className="text-slate-300 mx-1">·</span><span className="text-[10px] font-black text-amber-500 uppercase tracking-widest">ยังไม่มี </span><b className="text-amber-600">{pending}</b></React.Fragment>}
+                                        </div>
+                                        <div className="flex-1"></div>
+                                        <button onClick={() => copyText(allTracks, "__all__")} disabled={!matched.length} className="px-5 py-2.5 rounded-xl bg-slate-900 text-white font-black text-sm hover:bg-slate-700 transition-all shadow disabled:opacity-40 flex items-center gap-2">
+                                            {copiedKey === "__all__" ? "✓ คัดลอกแล้ว" : "📋 คัดลอกเลขพัสดุทั้งหมด"}
+                                        </button>
+                                        <button onClick={() => copyText(allTsv, "__tsv__")} disabled={!matched.length} className="px-5 py-2.5 rounded-xl bg-white border-2 border-slate-300 text-slate-700 font-black text-sm hover:bg-slate-100 transition-all disabled:opacity-40 flex items-center gap-2" title="คัดลอกเป็น ออเดอร์[แท็บ]เลขพัสดุ วางลง Excel ได้เลย">
+                                            {copiedKey === "__tsv__" ? "✓ คัดลอกแล้ว" : "📑 ออเดอร์+พัสดุ (TSV)"}
+                                        </button>
+                                    </div>
+
+                                    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                                        <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                                            <table className="w-full text-left border-collapse">
+                                                <thead className="bg-slate-800 text-white text-[10px] font-black uppercase tracking-wider sticky top-0 z-10">
+                                                    <tr>
+                                                        <th className="p-3 w-12 text-center">#</th>
+                                                        <th className="p-3">เลขออเดอร์</th>
+                                                        <th className="p-3">ชื่อผู้รับ</th>
+                                                        <th className="p-3">เลขพัสดุ</th>
+                                                        <th className="p-3 w-24 text-center">คัดลอก</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="text-sm">
+                                                    {trackingRows.map((r, i) => (
+                                                        <tr key={i} className={`border-b border-slate-100 hover:bg-red-50 transition-colors ${!r.tracking ? "bg-amber-50/50" : ""}`}>
+                                                            <td className="p-3 text-center text-slate-400 font-bold">{i + 1}</td>
+                                                            <td className="p-3 font-black text-slate-800">{r.order}</td>
+                                                            <td className="p-3 text-slate-600">{r.name || "-"}</td>
+                                                            <td className="p-3 font-mono font-bold text-slate-800">{r.tracking ? r.tracking : <span className="text-amber-500 font-sans font-bold text-xs">ยังไม่มีเลขพัสดุ</span>}</td>
+                                                            <td className="p-3 text-center">
+                                                                {r.tracking ? (
+                                                                    <button onClick={() => copyText(r.tracking, i)} className={`px-3 py-1.5 rounded-lg font-black text-xs transition-all ${copiedKey === i ? "bg-emerald-500 text-white" : "bg-red-100 text-red-600 hover:bg-red-200"}`}>
+                                                                        {copiedKey === i ? "✓" : "คัดลอก"}
+                                                                    </button>
+                                                                ) : <span className="text-slate-300">—</span>}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                  </div>
+                                );
+                            })()}
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
