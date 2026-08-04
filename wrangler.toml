@@ -1,0 +1,15 @@
+# บอก Cloudflare ว่าไฟล์ไหนคือโค้ด Worker
+# (ถ้าไม่มีไฟล์นี้ Cloudflare จะมองว่า repo นี้เป็นเว็บ static เฉย ๆ)
+#
+# ความลับ (LINE_TOKEN / LINE_TO) ห้ามใส่ที่นี่
+# ให้ไปใส่ที่ Cloudflare → Worker → Settings → Variables and Secrets
+
+name = "page365-to-flash"
+main = "worker/line-notify.js"
+compatibility_date = "2024-11-01"
+
+# ตัวแปรที่ไม่ใช่ความลับ — แก้ได้ในหน้า Cloudflare เช่นกัน
+[vars]
+FIREBASE_PROJECT_ID = "page365-to-flash"
+ADMIN_URL = "https://lamsangstore.github.io/Page365-To-Flash/admin.html"
+ALLOWED_ORIGIN = "https://lamsangstore.github.io"

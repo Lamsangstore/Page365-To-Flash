@@ -6,7 +6,8 @@
 secrets.js
 *serviceAccount*.json
 .dev.vars
-wrangler.toml
+# หมายเหตุ: wrangler.toml commit ได้ (ไม่มีความลับ)
+# ความลับทั้งหมดอยู่ใน Cloudflare → Settings → Variables and Secrets
 
 # ระบบ
 .DS_Store
