@@ -1,0 +1,13 @@
+# ห้าม commit ความลับขึ้น repo (repo นี้เป็น public)
+# LINE Channel access token / groupId ต้องอยู่ใน Cloudflare Worker Secrets เท่านั้น
+.env
+.env.*
+*.secret
+secrets.js
+*serviceAccount*.json
+.dev.vars
+wrangler.toml
+
+# ระบบ
+.DS_Store
+node_modules/
