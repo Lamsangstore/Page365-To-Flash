@@ -1,0 +1,53 @@
+rules_version = '2';
+
+// ──────────────────────────────────────────────────────────────
+// วางไฟล์นี้ที่ Firebase Console → Firestore Database → Rules
+// ⚠️ แก้อีเมลใน isAdmin() ให้เป็นอีเมลแอดมินจริงก่อน Publish
+// ──────────────────────────────────────────────────────────────
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email in [
+        'biiigooo76@gmail.com'
+        // , 'admin2@gmail.com'
+      ];
+    }
+
+    function validOrder(d) {
+      return d.customerName is string && d.customerName.size() > 0 && d.customerName.size() <= 100
+          && d.phone is string && d.phone.size() >= 9 && d.phone.size() <= 20
+          && d.address is string && d.address.size() > 0 && d.address.size() <= 300
+          && d.postal is string && d.postal.matches('[0-9]{5}')
+          && d.weight is number && d.weight > 0 && d.weight <= 50
+          && d.width is number && d.length is number && d.height is number
+          && d.width > 0 && d.width <= 100 && d.length > 0 && d.length <= 100 && d.height > 0 && d.height <= 100
+          && d.isCod is bool
+          && d.amount is number && d.amount >= 0 && d.amount <= 50000
+          && d.items is list && d.items.size() <= 20
+          && (!('note' in d) || (d.note is string && d.note.size() <= 300));
+    }
+
+    match /orders/{orderId} {
+      // ลูกค้า: สร้างได้อย่างเดียว และต้องผูก uid ของตัวเอง + สถานะเริ่มต้นเท่านั้น
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.source == 'customer'
+                    && validOrder(request.resource.data);
+
+      // ลูกค้าอ่านได้เฉพาะออเดอร์ของตัวเอง (ใช้ตอน Worker ยืนยันข้อมูลก่อนส่ง LINE)
+      allow read: if isAdmin()
+                  || (request.auth != null && resource.data.uid == request.auth.uid);
+
+      // แก้ไข / ลบ / เพิ่มเองในหน้า admin — แอดมินเท่านั้น
+      allow update, delete: if isAdmin();
+      allow create: if isAdmin();
+    }
+
+    // ปิดทุกอย่างที่เหลือ
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

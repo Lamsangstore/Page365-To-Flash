@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shipping Converter PRO — กรอกเอง</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📝</text></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="postal-db.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Anuphan:wght@300;400;600;700&display=swap');
+        body { font-family: 'Anuphan', sans-serif; cursor: default; }
+        .resize-handle { width: 6px; cursor: col-resize; position: absolute; right: 0; top: 0; bottom: 0; z-index: 10; transition: background 0.2s; }
+        .resize-handle:hover { background: #fbbf24; }
+        textarea::-webkit-scrollbar { width: 4px; height: 4px; }
+        textarea::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .select-none { user-select: none; }
+        .grab-cursor { cursor: grab; }
+        .grabbing-cursor { cursor: grabbing !important; }
+    </style>
+</head>
+<body class="bg-slate-100 min-h-screen">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect, useCallback } = React;
+
+// ── ฐานข้อมูลรหัสไปรษณีย์ (postal-db.js) ─────────────────────────
+const POSTAL_DB = window.POSTAL_DB || {};
+const ALL_PROVINCES = (() => {
+    const s = new Set();
+    Object.values(POSTAL_DB).forEach(v => { if (v.p) s.add(v.p); });
+    return Array.from(s).sort((a, b) => a.localeCompare(b, 'th'));
+})();
+const CUSTOM = "__custom__";
+
+// ค่าตั้งต้นของพัสดุ (ใช้เมื่อไม่ได้กรอก)
+const DEFAULT_PARCEL = { weight: 0.5, width: 25, length: 32, height: 5 };
+// ค่าที่ Flash ยอมรับ (ตาม dropdown ในไฟล์เทมเพลต)
+const ITEM_TYPES = ["ต้นไม้","เอกสาร","ผลไม้","อาหารแห้ง","ของใช้","อุปกรณ์ไอที","เสื้อผ้า","สื่อบันเทิง","อะไหล่ยนต์","รองเท้า/กระเป๋า","เครื่องสำอางค์","เฟอร์นิเจอร์","อื่นๆ","เครื่องดนตรี","อุปกรณ์การแพทย์"];
+const PRODUCT_TYPES = ["Standard","Bulky","On-time delivery","Fruit parcel","Tree","Happy Return","Happy Return Bulky"];
+const ITEM_TYPE = "เสื้อผ้า";
+const num = (v, d) => { const n = parseFloat(v); return isNaN(n) ? d : n; };
+const orEmpty = (v) => (v === undefined || v === null ? "" : v);
+
+// รวมที่อยู่จากช่องต่าง ๆ เป็นข้อความเดียว (รูปแบบเดียวกับที่ระบบเดิมอ่านได้)
+const composeAddress = (p) => {
+    const line = String(p.addrLine || "").replace(/[\r\n]+/g, " ").replace(/\s{2,}/g, " ").trim();
+    const isBkk = p.province === "กรุงเทพมหานคร";
+    const sub = p.subdistrict ? (isBkk ? `แขวง${p.subdistrict}` : `ตำบล${p.subdistrict}`) : "";
+    const dist = p.district
+        ? (isBkk ? (p.district.startsWith("เขต") ? p.district : `เขต${p.district}`) : `อำเภอ${p.district.replace(/^อำเภอ/, "")}`)
+        : "";
+    const prov = p.province ? (isBkk ? "กรุงเทพมหานคร" : `จังหวัด${p.province}`) : "";
+    return [line, sub, dist, prov, p.postal].filter(Boolean).join(" ").replace(/\s{2,}/g, " ").trim();
+};
+
+const App = () => {
+    // กล่องยืนยันในหน้าเว็บ (ไม่ใช้ confirm/alert ของเบราว์เซอร์ เพราะบางหน้าต่างบล็อกไว้)
+    const [dialog, setDialog] = useState(null);
+    const askConfirm = (title, message, onConfirm, opts = {}) =>
+        setDialog({ title, message, onConfirm, confirmLabel: opts.confirmLabel || "ยืนยัน", danger: opts.danger !== false });
+    const showInfo = (title, message) => setDialog({ title, message, onConfirm: null, confirmLabel: "ตกลง", danger: false });
+
+    useEffect(() => {
+        if (!dialog) return;
+        const onKey = (e) => { if (e.key === 'Escape') setDialog(null); };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [dialog]);
+
+    const [carrier, setCarrierRaw] = useState(() => {
+        try { return localStorage.getItem('flashConverter_carrier') || 'flash'; } catch(e) { return 'flash'; }
+    });
+    const setCarrier = (c) => {
+        setCarrierRaw(c);
+        try { localStorage.setItem('flashConverter_carrier', c); } catch(e) {}
+    };
+
+    // ── Orders ที่ลูกค้ากรอกเอง ───────────────────────────────────
+    const [orders, setOrders] = useState(() => {
+        try {
+            const saved = localStorage.getItem('manualConverter_orders');
+            if (saved) { const p = JSON.parse(saved); if (Array.isArray(p)) return p; }
+        } catch(e) {}
+        return [];
+    });
+    const [data, setData] = useState([]);              // rows ที่แปลงแล้ว (แก้ในตารางได้)
+    const [selectedRows, setSelectedRows] = useState(new Set());
+    const [editingIndex, setEditingIndex] = useState(-1);
+    const [showMissing, setShowMissing] = useState(false);   // ไฮไลต์ช่องที่ยังไม่ได้กรอก
+    const [pasteText, setPasteText] = useState("");
+    const formRef = useRef(null);
+
+    const EMPTY_FORM = {
+        no: "", customerName: "", phone: "",
+        postal: "", province: "", district: "", subdistrict: "", addrLine: "",
+        customDistrict: false, customSubdistrict: false,
+        weight: "", width: "", length: "", height: "",
+        itemType: ITEM_TYPE, productType: "Standard",
+        isCod: false, amount: "",
+        items: [{ name: "", variant: "", size: "", qty: 1 }]
+    };
+    const [form, setForm] = useState(EMPTY_FORM);
+
+    useEffect(() => {
+        try { localStorage.setItem('manualConverter_orders', JSON.stringify(orders)); } catch(e) {}
+    }, [orders]);
+
+    // ── Headers & ColWidths per carrier ──────────────────────────
+    // Flash แบบไม่ใช่ COD (order_template_noncod_nonreceipt.xlsx — 19 คอลัมน์)
+    const FLASH_HEADERS = [
+        "Customer_order_number\n(เลขออเดอร์ของลูกค้า)",
+        "*Consignee_name\n(ชื่อผู้รับ)",
+        "*Address\n(ทิ่อยู่)",
+        "*Postal_code\n(รหัสไปรษณีย์)",
+        "*Phone_number\n(เบอร์โทรศัพท์)",
+        "Phone_number2\n(เบอร์โทรศัพท์)",
+        "Item_type\n(ประเภทสินค้า)",
+        "*Weight_kg\n(น้ำหนัก)",
+        "*Length\n(ยาว)",
+        "*Width\n(กว้าง)",
+        "*Height\n(สูง)",
+        "Flash_care",
+        "Flash_care_plus",
+        "Declared_value\n(มูลค่าสินค้าที่ระบุโดยลูกค้า)",
+        "Box_shield",
+        "*Product_type         (ประเภทสินค้า）",
+        "Remark1\n(หมายเหตุ1)",
+        "Remark2\n(หมายเหตุ2)",
+        "Remark3\n(หมายเหตุ3)"
+    ];
+    // Flash แบบ COD (order_template_cod_nonreceipt.xlsx — 25 คอลัมน์)
+    const FLASH_COD_HEADERS = [
+        "Customer_order_number\n(เลขออเดอร์ของลูกค้า)",
+        "*Consignee_name\n(ชื่อผู้รับ)",
+        "*Address\n(ทิ่อยู่)",
+        "*Postal_code\n(รหัสไปรษณีย์)",
+        "*Phone_number\n(เบอร์โทรศัพท์)",
+        "Phone_number2\n(เบอร์โทรศัพท์)",
+        "COD\n(ยอดเรียกเก็บ)",
+        "Item description1(Name|Size/Weight|color|quantity)",
+        "Item description2(Name|Size/Weight|color|quantity)",
+        "Item description3(Name|Size/Weight|color|quantity)",
+        "Item description4(Name|Size/Weight|color|quantity)",
+        "Item description5(Name|Size/Weight|color|quantity)",
+        "Item_type\n(ประเภทสินค้า)",
+        "*Weight_kg\n(น้ำหนัก)",
+        "*Length\n(ยาว)",
+        "*Width\n(กว้าง)",
+        "*Height\n(สูง)",
+        "Flash_care",
+        "Flash_care_plus",
+        "Declared_value\n(มูลค่าสินค้าที่ระบุโดยลูกค้า)",
+        "Box_shield",
+        "*Product_type         (ประเภทสินค้า）",
+        "Remark1\n(หมายเหตุ1)",
+        "Remark2\n(หมายเหตุ2)",
+        "Remark3\n(หมายเหตุ3)"
+    ];
+    const H_COD = FLASH_COD_HEADERS[6];
+    const H_WEIGHT = FLASH_HEADERS[7];
+    const JT_HEADERS = [
+        "ชื่อสกุลผู้รับ",
+        "เบอร์โทรศัพท์มือถือผู้รับ",
+        "จังหวัดผู้รับ",
+        "เขตอำเภอผู้รับ",
+        "ตำบลปลายทาง",
+        "รหัสไปรษณีย์ปลายทาง",
+        "ที่อยู่ผู้รับ",
+        "รายละเอียดพัสดุ",
+        "ประเภทพัสดุ",
+        "น้ำหนักพัสดุ(kg)",
+        "ยาว(ซม.)",
+        "กว้าง(ซม.)",
+        "สูง(ซม.)",
+        "จำนวนเงินที่ชำระปลายทาง (COD)",
+        "บริการSuper"
+    ];
+    const FLASH_COLWIDTHS = [80, 300, 200, 450, 100, 130, 130, 120, 100, 80, 80, 80, 100, 110, 130, 100, 150, 800, 150, 150];
+    const FLASH_COD_COLWIDTHS = [80, 300, 200, 450, 100, 130, 130, 110, 220, 220, 220, 220, 220, 120, 100, 80, 80, 80, 100, 110, 130, 100, 150, 800, 150, 150];
+    const JT_COLWIDTHS = [80, 200, 150, 150, 180, 150, 130, 350, 350, 100, 110, 80, 80, 80, 130, 100];
+
+    const tableContainerRef = useRef(null);
+    const topScrollRef = useRef(null);
+    const isSyncingScroll = useRef(false);
+    const isDragging = useRef(false);
+    const lastMouseX = useRef(0);
+    const isResizing = useRef(-1);
+    const startX = useRef(0);
+    const startWidth = useRef(0);
+
+    // มีออเดอร์ COD ในรายการที่เลือกไหม → Flash ใช้เทมเพลตคนละแบบ
+    const isCodRow = (r) => String(r[H_COD] || "").trim() !== "";
+    const codRows = data.filter((_, i) => selectedRows.has(i)).filter(isCodRow);
+    const nonCodRows = data.filter((_, i) => selectedRows.has(i)).filter(r => !isCodRow(r));
+    const useCodTemplate = carrier === "flash" && codRows.length > 0;
+
+    const [colWidths, setColWidths] = useState(FLASH_COLWIDTHS);
+    useEffect(() => {
+        setColWidths(carrier === "jt" ? JT_COLWIDTHS : useCodTemplate ? FLASH_COD_COLWIDTHS : FLASH_COLWIDTHS);
+    }, [carrier, useCodTemplate]);
+
+    const headersForExport = carrier === "jt" ? JT_HEADERS : useCodTemplate ? FLASH_COD_HEADERS : FLASH_HEADERS;
+    const remarkIdx = headersForExport.findIndex(h => h.startsWith("Remark1"));
+    const totalTableWidth = colWidths.reduce((a, b) => a + b, 0);
+
+    // ── Scroll sync / column resize ───────────────────────────────
+    const handleScrollSync = (source) => {
+        if (isSyncingScroll.current) return;
+        isSyncingScroll.current = true;
+        if (source === 'top' && tableContainerRef.current) tableContainerRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+        else if (source === 'table' && topScrollRef.current) topScrollRef.current.scrollLeft = tableContainerRef.current.scrollLeft;
+        setTimeout(() => { isSyncingScroll.current = false; }, 10);
+    };
+
+    const handleMouseDown = (e) => {
+        if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.classList.contains('resize-handle')) return;
+        isDragging.current = true;
+        lastMouseX.current = e.pageX;
+        document.body.classList.add('grabbing-cursor');
+    };
+
+    const handleGlobalMouseMove = useCallback((e) => {
+        if (isResizing.current !== -1) {
+            const diff = e.pageX - startX.current;
+            const newWidths = [...colWidths];
+            newWidths[isResizing.current] = Math.max(50, startWidth.current + diff);
+            setColWidths(newWidths);
+            return;
+        }
+        if (isDragging.current && tableContainerRef.current) {
+            tableContainerRef.current.scrollLeft -= e.pageX - lastMouseX.current;
+            lastMouseX.current = e.pageX;
+        }
+    }, [colWidths]);
+
+    const handleGlobalMouseUp = useCallback(() => {
+        isDragging.current = false;
+        isResizing.current = -1;
+        document.body.classList.remove('grabbing-cursor');
+    }, []);
+
+    useEffect(() => {
+        document.addEventListener('mousemove', handleGlobalMouseMove);
+        document.addEventListener('mouseup', handleGlobalMouseUp);
+        return () => {
+            document.removeEventListener('mousemove', handleGlobalMouseMove);
+            document.removeEventListener('mouseup', handleGlobalMouseUp);
+        };
+    }, [handleGlobalMouseMove, handleGlobalMouseUp]);
+
+    const onResizeStart = (index, e) => {
+        e.stopPropagation();
+        isResizing.current = index;
+        startX.current = e.pageX;
+        startWidth.current = colWidths[index];
+    };
+
+    // ── Address parser (Thai) ─────────────────────────────────────
+    const parseThaiAddress = (addr) => {
+        const postal = (addr.match(/\d{5}/) || [""])[0];
+        let province = "", district = "", subdistrict = "";
+
+        const provMatch = addr.match(/(?:จังหวัด|จ\.)\s*([\u0E00-\u0E7F]+)/);
+        if (provMatch) province = provMatch[1].trim();
+        else {
+            const bkk = addr.match(/(กรุงเทพ(?:มหานคร)?|กทม\.?)/);
+            if (bkk) province = "กรุงเทพมหานคร";
+        }
+
+        let distMatch = addr.match(/(?:^|\s)(?:อำเภอ|อ\.)\s*([\u0E00-\u0E7F]+)/);
+        if (!distMatch) {
+            distMatch = addr.match(/(?:^|\s)เขต([\u0E00-\u0E7F]+)/);
+            if (distMatch) district = "เขต" + distMatch[1].trim();
+        } else {
+            district = distMatch[1].trim();
+            if (province === "กรุงเทพมหานคร" && !district.startsWith("เขต")) {
+                district = "เขต" + district;
+            }
+        }
+
+        let subMatch = addr.match(/(?:^|\s)(?:ตำบล|ต\.)\s*([\u0E00-\u0E7F]+)/);
+        if (!subMatch) subMatch = addr.match(/(?:^|\s)แขวง([\u0E00-\u0E7F]+)/);
+        if (subMatch) subdistrict = subMatch[1].trim();
+
+        const DB = window.POSTAL_DB || {};
+        const entry = postal && DB[postal];
+        if (entry) {
+            if (!province) province = entry.p || "";
+            if (!district && entry.d && entry.d.length > 0) {
+                const matched = entry.d.find(d => addr.includes(d));
+                district = matched || entry.d[0];
+                if (province === "กรุงเทพมหานคร" && !district.startsWith("เขต")) district = "เขต" + district;
+            }
+            if (!subdistrict && entry.s && entry.s.length > 0) {
+                const matched = entry.s.find(s => addr.includes(s));
+                subdistrict = matched || entry.s[0];
+            }
+        }
+
+        return { province, district, subdistrict, postal };
+    };
+
+    // ── Build rows per carrier (เหมือนหน้าอัปโหลดไฟล์ทุกประการ) ───
+    const buildRowsForCarrier = (orderList, carrierKey) => {
+        const HEADERS = carrierKey === "jt" ? JT_HEADERS : FLASH_HEADERS;
+
+        const colorAbbr = {
+            "ขาว":"ขาว","แดง":"แดง","ดำ":"ดำ","คาราเมล":"ครม","น้ำตาล":"นต","กรม":"ก",
+            "กาแฟ":"กฟ","ชานม":"ชน","น้ำตาลเข้ม":"นตข","กากี":"กากี","ครีม":"ค","เทา":"ท",
+            "น้ำตาลอ่อน":"นตอ","ขาว & กากี":"ข&ก","ดำ & กากี":"ด&ก","ดำ & ขาว":"ด&ข",
+            "ดำ & ส้ม":"ด&ส","ส้มอิฐ":"สอ","โกโก้":"กก","ลาเต้":"ลต","เขียว":"เขียว",
+            "ชมพู":"ชพ","เบจ":"เบจ","ฟ้า":"ฟ้า","เหลืองมัสตาร์ด":"หล","ม่วง":"ม่วง",
+            "ขาวนวล":"ขาว","Moonless Night (ด้ายดำ)":"ดำ","Moonlit Night (ด้ายขาว)":"ขาว",
+            "เขียวขี้ม้า":"ขขม","เทาเข้ม":"ทข","เทาอ่อน":"ทอ","เหลือง":"หล","เขียวเข้ม":"ขม",
+            "ม่วงเข้ม":"มข","ม่วงอ่อน":"มอ","เหลืองอ่อน":"หลอ","แดงไวน์":"แดง","เทาดำ":"ทด",
+            "ชมพูนู้ด":"ชพ","โอวัลติน":"อวต","มะกอก":"มก","เลม่อน":"ลม","ชาโคล":"ชค","เทาฟ้า":"ทฟ"
+        };
+        const abbrevColor = (v) => colorAbbr[v] || v;
+
+        const cleanAddress = (addr) => {
+            if (/อำเภอเมือง|อ\.เมือง/.test(addr)) {
+                return addr
+                    .replace(/ตำบล\s*/g,"").replace(/ต\.\s*/g,"")
+                    .replace(/อำเภอ\s*/g,"").replace(/อ\.\s*/g,"")
+                    .replace(/จังหวัด\s*/g,"").replace(/จ\.\s*/g,"")
+                    .replace(/\s{2,}/g," ").trim();
+            }
+            return addr;
+        };
+
+        return orderList.map(order => {
+            const items = (order.items || []).filter(i => String(i.name).trim() !== "");
+
+            // ── น้ำหนัก/ขนาด: เป็นของทั้งพัสดุ (กรอกครั้งเดียวต่อออเดอร์) ──
+            const pkg = {
+                weight: num(order.weight, DEFAULT_PARCEL.weight),
+                width: num(order.width, DEFAULT_PARCEL.width),
+                length: num(order.length, DEFAULT_PARCEL.length),
+                height: num(order.height, DEFAULT_PARCEL.height),
+                productType: order.productType || "Standard"
+            };
+            const exportWeight = pkg.weight.toFixed(2);
+            const exportHeight = pkg.height;
+
+            const buildOrderParts = (useAbbr) => items.map(i => {
+                const code = String(i.name).substring(0, 3).trim();
+                const v = i.variant ? `-${useAbbr ? abbrevColor(i.variant) : i.variant}` : "";
+                return `${i.qty} = ${code}${v}`;
+            });
+            let orderInfoStr = items.length ? `${order.no} | ${buildOrderParts(false).join(" | ")}` : String(order.no);
+            if (orderInfoStr.length > 64) orderInfoStr = `${order.no} | ${buildOrderParts(true).join(" | ")}`;
+            if (orderInfoStr.length > 64) orderInfoStr = orderInfoStr.substring(0, 64);
+
+            const remarkFull = items.map(i => `จำนวน ${i.qty} ชิ้น | ${i.name}${i.variant ? ` (${i.variant})` : ""}`).join(", ");
+            const codAmount = order.isCod ? (parseFloat(order.amount) || 0) : 0;
+            const address = String(order.address || "");
+            const postalCode = (address.match(/\d{5}$/) || [""])[0];
+            const cleanedAddr = cleanAddress(address);
+
+            if (carrierKey === "jt") {
+                const parsed = parseThaiAddress(address);
+                let strippedAddr = address
+                    .replace(/[\t\r\n]+/g, " ")
+                    .replace(/(?:ตำบล|ต\.|แขวง)\s*[\u0E00-\u0E7F]+/g, "")
+                    .replace(/(?:อำเภอ|อ\.|เขต)\s*[\u0E00-\u0E7F]+/g, "")
+                    .replace(/(?:จังหวัด|จ\.)\s*[\u0E00-\u0E7F]+/g, "")
+                    .replace(/(กรุงเทพ(?:มหานคร)?|กทม\.?)/g, "")
+                    .replace(/\d{5}/g, "")
+                    .replace(/เขต(?![\u0E00-\u0E7F])/g, "")
+                    .replace(/\s{2,}/g, " ")
+                    .replace(/\s*,\s*/g, " ")
+                    .trim();
+                const addrWithCode = `${strippedAddr} (${orderInfoStr})`;
+                return {
+                    [HEADERS[0]]: `${order.no} ${order.customerName}`,
+                    [HEADERS[1]]: order.phone,
+                    [HEADERS[2]]: parsed.province,
+                    [HEADERS[3]]: parsed.district,
+                    [HEADERS[4]]: parsed.subdistrict,
+                    [HEADERS[5]]: parsed.postal || postalCode,
+                    [HEADERS[6]]: addrWithCode,
+                    [HEADERS[7]]: "เครื่องแต่งกาย",
+                    [HEADERS[8]]: "ซองพัสดุ",
+                    [HEADERS[9]]: exportWeight,
+                    [HEADERS[10]]: pkg.length,
+                    [HEADERS[11]]: pkg.width,
+                    [HEADERS[12]]: exportHeight,
+                    [HEADERS[13]]: codAmount || "",
+                    [HEADERS[14]]: "ไม่"
+                };
+            }
+
+            // ── Flash ── สร้างด้วยคีย์ของเทมเพลต COD (ครอบคลุมทั้ง 2 แบบ)
+            // ตอน export จะหยิบเฉพาะคอลัมน์ของเทมเพลตที่ใช้จริง
+            const H = FLASH_COD_HEADERS;
+            // Item description: Name|Size/Weight|color|quantity (สูงสุด 5 รายการ)
+            const desc = items.slice(0, 5).map(i =>
+                [String(i.name).trim(), String(i.size || "").trim(), String(i.variant || "").trim(), parseInt(i.qty) || 1].join("|")
+            );
+            const codInt = order.isCod ? Math.round(parseFloat(order.amount) || 0) : 0;
+
+            return {
+                [H[0]]: "",
+                [H[1]]: `${order.no} ${order.customerName}`,
+                [H[2]]: cleanedAddr,
+                [H[3]]: postalCode,
+                [H[4]]: order.phone,
+                [H[5]]: "",
+                [H[6]]: codInt || "",
+                [H[7]]: desc[0] || "",
+                [H[8]]: desc[1] || "",
+                [H[9]]: desc[2] || "",
+                [H[10]]: desc[3] || "",
+                [H[11]]: desc[4] || "",
+                [H[12]]: order.itemType || ITEM_TYPE,
+                [H[13]]: exportWeight,
+                [H[14]]: pkg.length,
+                [H[15]]: pkg.width,
+                [H[16]]: exportHeight,
+                [H[17]]: "N",
+                [H[18]]: "N",
+                [H[19]]: codInt || "",
+                [H[20]]: "N",
+                [H[21]]: pkg.productType,
+                [H[22]]: remarkFull,
+                [H[23]]: "",
+                [H[24]]: ""
+            };
+        });
+    };
+
+    // ── rebuild rows เมื่อ orders / carrier / settings / preset เปลี่ยน ──
+    useEffect(() => {
+        const rows = buildRowsForCarrier(orders, carrier);
+        setData(rows);
+        setSelectedRows(new Set(rows.map((_, i) => i)));
+        // eslint-disable-next-line
+    }, [orders, carrier]);
+
+    // ── ฟอร์มกรอกออเดอร์ ─────────────────────────────────────────
+    const nextOrderNo = () => {
+        const nums = orders.map(o => parseInt(o.no, 10)).filter(n => !isNaN(n));
+        return nums.length ? String(Math.max(...nums) + 1) : "";
+    };
+
+    const setField = (field, value) => setForm(f => ({ ...f, [field]: value }));
+
+    // ── กรอกรหัสไปรษณีย์ → เติมจังหวัด/อำเภอ/ตำบล ให้อัตโนมัติ ─────
+    const postalEntry = form.postal.length === 5 ? POSTAL_DB[form.postal] : null;
+    const addrLocked = form.postal.length !== 5;   // ยังกรอกรหัสไปรษณีย์ไม่ครบ → ล็อกช่องที่อยู่ไว้ก่อน
+    const districtOptions = postalEntry ? (postalEntry.d || []) : [];
+    const subdistrictOptions = postalEntry ? (postalEntry.s || []) : [];
+
+    const setPostal = (value) => {
+        const postal = String(value).replace(/\D/g, "").slice(0, 5);
+        setForm(f => {
+            const next = { ...f, postal };
+            if (postal.length === 5) {
+                const e = POSTAL_DB[postal];
+                if (e) {
+                    const ds = e.d || [], ss = e.s || [];
+                    next.province = e.p || "";
+                    next.district = ds.length === 1 ? ds[0] : (ds.includes(f.district) ? f.district : "");
+                    next.subdistrict = ss.length === 1 ? ss[0] : (ss.includes(f.subdistrict) ? f.subdistrict : "");
+                    next.customDistrict = false;
+                    next.customSubdistrict = false;
+                }
+            } else if (f.postal.length === 5) {
+                // ลบรหัสไปรษณีย์ทิ้ง → ล้างค่าที่เติมอัตโนมัติไว้
+                next.province = ""; next.district = ""; next.subdistrict = "";
+                next.customDistrict = false; next.customSubdistrict = false;
+            }
+            return next;
+        });
+    };
+
+    const setSelectField = (field, customFlag, value) => {
+        if (value === CUSTOM) setForm(f => ({ ...f, [field]: "", [customFlag]: true }));
+        else setForm(f => ({ ...f, [field]: value }));
+    };
+
+    const makeItem = () => ({ name: "", variant: "", size: "", qty: 1 });
+
+    const setItem = (idx, field, value) => setForm(f => ({
+        ...f, items: f.items.map((it, i) => i === idx ? { ...it, [field]: value } : it)
+    }));
+    const addItem = () => setForm(f => ({ ...f, items: [...f.items, makeItem()] }));
+    const removeItem = (idx) => setForm(f => ({ ...f, items: f.items.length > 1 ? f.items.filter((_, i) => i !== idx) : f.items }));
+
+    const resetForm = () => { setForm({ ...EMPTY_FORM, items: [makeItem()] }); setEditingIndex(-1); setShowMissing(false); };
+
+    // ── ข้อมูลจำเป็นที่ยังขาด (ใช้ทั้งไฮไลต์สีแดงและตอนกดเพิ่มออเดอร์) ──
+    const missing = {
+        customerName: !String(form.customerName).trim(),
+        phone: String(form.phone).replace(/\D/g, "").length < 9,
+        postal: !/^\d{5}$/.test(form.postal),
+        province: !String(form.province).trim(),
+        district: !String(form.district).trim(),
+        subdistrict: !String(form.subdistrict).trim(),
+        addrLine: !String(form.addrLine).trim(),
+        weight: !(parseFloat(form.weight) > 0),
+        width: !(parseFloat(form.width) > 0),
+        length: !(parseFloat(form.length) > 0),
+        height: !(parseFloat(form.height) > 0),
+        amount: !!form.isCod && !(parseFloat(form.amount) > 0),
+        items: !!form.isCod && form.items.filter(i => String(i.name).trim() !== "").length === 0
+    };
+    const MISSING_LABELS = {
+        customerName: "ชื่อผู้รับ", phone: "เบอร์โทร (9–10 หลัก)", postal: "รหัสไปรษณีย์",
+        province: "จังหวัด", district: "อำเภอ/เขต", subdistrict: "ตำบล/แขวง",
+        addrLine: "ที่อยู่ (บ้านเลขที่ หมู่ ซอย ถนน)", weight: "น้ำหนักพัสดุ",
+        width: "ความกว้าง", length: "ความยาว", height: "ความสูง",
+        amount: "ยอดเก็บเงินปลายทาง (COD)", items: "รายการสินค้า (COD)"
+    };
+    const missingLabels = Object.keys(MISSING_LABELS).filter(k => missing[k]).map(k => MISSING_LABELS[k]);
+
+    // ใส่กรอบแดงให้ช่องที่ยังไม่ได้กรอก (หลังกด "แยกข้อมูลให้" หรือ "เพิ่มออเดอร์")
+    const markCls = (key, base) => base + (showMissing && missing[key] ? " !border-red-400 !bg-red-50" : "");
+
+    const submitOrder = () => {
+        const items = form.items.filter(i => String(i.name).trim() !== "");
+        if (missingLabels.length > 0) { setShowMissing(true); return; }
+
+        const parts = {
+            postal: form.postal,
+            province: String(form.province).trim(),
+            district: String(form.district).trim(),
+            subdistrict: String(form.subdistrict).trim(),
+            addrLine: String(form.addrLine).replace(/[\r\n]+/g, " ").replace(/\s{2,}/g, " ").trim()
+        };
+
+        const order = {
+            no: String(form.no).trim() || nextOrderNo() || String(orders.length + 1),
+            customerName: String(form.customerName).trim(),
+            phone: String(form.phone).replace(/[^\d]/g, ""),
+            ...parts,
+            address: composeAddress(parts),
+            weight: num(form.weight, DEFAULT_PARCEL.weight),
+            width: num(form.width, DEFAULT_PARCEL.width),
+            length: num(form.length, DEFAULT_PARCEL.length),
+            height: num(form.height, DEFAULT_PARCEL.height),
+            itemType: form.itemType || ITEM_TYPE,
+            productType: form.productType || "Standard",
+            isCod: !!form.isCod,
+            amount: form.isCod ? (parseFloat(form.amount) || 0) : 0,
+            items: items.map(i => ({
+                name: String(i.name).trim(), variant: String(i.variant).trim(),
+                size: String(i.size || "").trim(), qty: parseInt(i.qty) || 1
+            }))
+        };
+
+        if (editingIndex >= 0) setOrders(orders.map((o, i) => i === editingIndex ? order : o));
+        else setOrders([...orders, order]);
+        resetForm();
+    };
+
+    const editOrder = (idx) => {
+        const o = orders[idx];
+        // ออเดอร์รุ่นเก่าเก็บแต่ที่อยู่รวม → แยกกลับเป็นช่อง ๆ ให้
+        const parts = o.addrLine !== undefined ? o : (() => {
+            const p = parseThaiAddress(o.address || "");
+            const line = String(o.address || "")
+                .replace(/(?:ตำบล|ต\.|แขวง)\s*[\u0E00-\u0E7F]+/g, "")
+                .replace(/(?:อำเภอ|อ\.|เขต)\s*[\u0E00-\u0E7F]+/g, "")
+                .replace(/(?:จังหวัด|จ\.)\s*[\u0E00-\u0E7F]+/g, "")
+                .replace(/(กรุงเทพ(?:มหานคร)?|กทม\.?)/g, "")
+                .replace(/\d{5}/g, "").replace(/\s{2,}/g, " ").trim();
+            return { postal: p.postal, province: p.province, district: p.district.replace(/^เขต/, ""), subdistrict: p.subdistrict, addrLine: line };
+        })();
+        const entry = POSTAL_DB[parts.postal];
+        setForm({
+            no: o.no, customerName: o.customerName, phone: o.phone,
+            postal: parts.postal || "", province: parts.province || "",
+            district: parts.district || "", subdistrict: parts.subdistrict || "",
+            addrLine: parts.addrLine || "",
+            customDistrict: !!(parts.district && (!entry || !(entry.d || []).includes(parts.district))),
+            customSubdistrict: !!(parts.subdistrict && (!entry || !(entry.s || []).includes(parts.subdistrict))),
+            weight: orEmpty(o.weight), width: orEmpty(o.width), length: orEmpty(o.length), height: orEmpty(o.height),
+            itemType: o.itemType || ITEM_TYPE,
+            productType: o.productType || "Standard",
+            isCod: !!o.isCod,
+            amount: o.isCod ? (o.amount || "") : "",
+            items: o.items.length ? o.items.map(i => ({ name: i.name, variant: i.variant, size: i.size || "", qty: i.qty })) : [makeItem()]
+        });
+        setEditingIndex(idx);
+        setShowMissing(false);
+        if (formRef.current) formRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    const deleteOrder = (idx) => {
+        const o = orders[idx];
+        askConfirm("ลบออเดอร์นี้?", `${o.no} · ${o.customerName}\n${o.address || ""}`, () => {
+            setOrders(orders.filter((_, i) => i !== idx));
+            if (editingIndex === idx) resetForm();
+        }, { confirmLabel: "ลบออเดอร์" });
+    };
+    const duplicateOrder = (idx) => {
+        const o = orders[idx];
+        setOrders([...orders, { ...o, no: nextOrderNo() || String(orders.length + 1), items: o.items.map(i => ({ ...i })) }]);
+    };
+
+    // ── แยกข้อมูลจากข้อความที่วาง (ชื่อ / เบอร์ / ที่อยู่) ─────────
+    const parsePasted = () => {
+        const text = pasteText.trim();
+        if (!text) return;
+
+        // หาเบอร์โทรทีละบรรทัด (กันไม่ให้ regex กินข้ามบรรทัดไปเอาเลขที่บ้าน)
+        let phone = "";
+        const lines = [];
+        text.split(/[\r\n]+/).forEach(line => {
+            let rest = line;
+            if (!phone) {
+                const cands = line.match(/0[\d\-. ]{7,12}\d/g) || [];
+                for (const c of cands) {
+                    const digits = c.replace(/\D/g, "");
+                    if (digits.length === 9 || digits.length === 10) { phone = digits; rest = line.replace(c, " "); break; }
+                }
+            }
+            rest = rest.replace(/(?:เบอร์(?:โทร)?|โทรศัพท์|โทร|tel)\s*\.?\s*:?\s*/gi, " ").replace(/\s{2,}/g, " ").trim();
+            if (rest) lines.push(rest);
+        });
+
+        let name = "", addrLines = [];
+        lines.forEach(l => {
+            const cleaned = l.replace(/^(?:ชื่อ|ชื่อผู้รับ|ผู้รับ|name)\s*:?\s*/i, "").trim();
+            const isAddr = /\d{5}/.test(l) || /(บ้านเลขที่|หมู่|ซอย|ถนน|ตำบล|ต\.|อำเภอ|อ\.|จังหวัด|จ\.|แขวง|เขต|กรุงเทพ|กทม)/.test(l);
+            if (!name && !isAddr && cleaned) name = cleaned;
+            else if (cleaned) addrLines.push(cleaned.replace(/^(?:ที่อยู่|address)\s*:?\s*/i, "").trim());
+        });
+        if (!name && addrLines.length > 1) { name = addrLines.shift(); }
+
+        const fullAddr = addrLines.join(" ").replace(/\s{2,}/g, " ").trim();
+        const parsed = parseThaiAddress(fullAddr);
+        const entry = POSTAL_DB[parsed.postal];
+        // ที่อยู่ที่เหลือหลังตัด ตำบล/อำเภอ/จังหวัด/ไปรษณีย์ ออก
+        const line = fullAddr
+            .replace(/(?:ตำบล|ต\.|แขวง)\s*[\u0E00-\u0E7F]+/g, "")
+            .replace(/(?:อำเภอ|อ\.|เขต)\s*[\u0E00-\u0E7F]+/g, "")
+            .replace(/(?:จังหวัด|จ\.)\s*[\u0E00-\u0E7F]+/g, "")
+            .replace(/(กรุงเทพ(?:มหานคร)?|กทม\.?)/g, "")
+            .replace(/\d{5}/g, "")
+            .replace(/\s*,\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+
+        setForm(f => {
+            const next = { ...f, customerName: name || f.customerName, phone: phone || f.phone };
+            if (line) next.addrLine = line;
+            if (parsed.postal) {
+                next.postal = parsed.postal;
+                next.province = parsed.province || f.province;
+                const dist = String(parsed.district || "").replace(/^เขต/, "");
+                next.district = dist || f.district;
+                next.subdistrict = parsed.subdistrict || f.subdistrict;
+                next.customDistrict = !!(next.district && (!entry || !(entry.d || []).includes(next.district)));
+                next.customSubdistrict = !!(next.subdistrict && (!entry || !(entry.s || []).includes(next.subdistrict)));
+            }
+            return next;
+        });
+        setPasteText("");
+        setShowMissing(true);   // โชว์ว่ายังขาดอะไรบ้างหลังแยกข้อมูล
+    };
+
+    const addrPreview = composeAddress(form);
+
+    // ── Validation per row ───────────────────────────────────────
+    const validateRow = (row, carrierKey) => {
+        const issues = [];
+        const HEADERS = carrierKey === "jt" ? JT_HEADERS : FLASH_HEADERS;
+
+        const phone = String(row[HEADERS[carrierKey === "jt" ? 1 : 4]] || "").replace(/\D/g,"");
+        if (phone.length < 9) issues.push("เบอร์โทรไม่ครบ");
+
+        if (carrierKey === "jt") {
+            if (!row[HEADERS[2]]) issues.push("ไม่มีจังหวัด");
+            if (!row[HEADERS[3]]) issues.push("ไม่มีเขต/อำเภอ");
+            if (!row[HEADERS[4]]) issues.push("ไม่มีตำบล/แขวง");
+            const postal = String(row[HEADERS[5]] || "");
+            if (!/^\d{5}$/.test(postal)) issues.push("รหัสไปรษณีย์ไม่ถูกต้อง");
+        } else {
+            const postal = String(row[HEADERS[3]] || "");
+            if (!/^\d{5}$/.test(postal)) issues.push("รหัสไปรษณีย์ไม่ถูกต้อง");
+            if (!row[HEADERS[2]]) issues.push("ไม่มีที่อยู่");
+
+            // กฎของเทมเพลต Flash
+            const w = parseFloat(row[H_WEIGHT]);
+            if (!(w >= 0.01 && w <= 50)) issues.push("น้ำหนักต้องอยู่ระหว่าง 0.01–50 กก.");
+            const L = parseFloat(row[FLASH_COD_HEADERS[14]]), W = parseFloat(row[FLASH_COD_HEADERS[15]]), Hh = parseFloat(row[FLASH_COD_HEADERS[16]]);
+            if ([L, W, Hh].some(v => !(v > 0) || v > 100 || !Number.isInteger(v))) issues.push("ขนาดต้องเป็นจำนวนเต็ม ไม่เกินด้านละ 100 ซม.");
+            else if (L + W + Hh > 280) issues.push("ยาว+กว้าง+สูง รวมเกิน 280 ซม.");
+
+            const cod = String(row[H_COD] || "").trim();
+            if (cod) {
+                const c = parseFloat(cod);
+                if (!(c >= 1 && c <= 50000) || !Number.isInteger(c)) issues.push("ยอด COD ต้องเป็นจำนวนเต็ม 1–50,000");
+                if (!String(row[FLASH_COD_HEADERS[7]] || "").trim()) issues.push("ออเดอร์ COD ต้องมีรายละเอียดสินค้า");
+            }
+        }
+
+        return issues;
+    };
+
+    const rowIssues = data.map(r => validateRow(r, carrier));
+    const totalIssues = rowIssues.filter(i => i.length > 0).length;
+    const totalWeight = carrier === "jt"
+        ? data.filter((_, i) => selectedRows.has(i)).reduce((s, r) => s + parseFloat(r[JT_HEADERS[9]] || 0), 0)
+        : data.filter((_, i) => selectedRows.has(i)).reduce((s, r) => s + parseFloat(r[H_WEIGHT] || 0), 0);
+    const overLimit = data.length > 1000;
+    const totalCod = orders.filter((_, i) => selectedRows.has(i)).reduce((s, o) => s + (o.isCod ? (parseFloat(o.amount) || 0) : 0), 0);
+
+    // ── Download ─────────────────────────────────────────────────
+    const downloadExcel = () => {
+        const exportData = data.filter((_, i) => selectedRows.has(i));
+        if (exportData.length === 0) { showInfo("ยังไม่ได้เลือกรายการ", "กรุณาเลือกอย่างน้อย 1 รายการก่อนดาวน์โหลด"); return; }
+
+        if (carrier === "jt") {
+            if (exportData.length > 1000) {
+                askConfirm("เกิน 1,000 รายการ",
+                    `J&T รับสูงสุด 1,000 รายการต่อครั้ง คุณเลือกไว้ ${exportData.length} รายการ\nต้องการดาวน์โหลดต่อหรือไม่?`,
+                    () => writeExcel(exportData, JT_HEADERS, "导入-V20211028", "JT_Order_Template"),
+                    { confirmLabel: "ดาวน์โหลดต่อ", danger: false });
+                return;
+            }
+            writeExcel(exportData, JT_HEADERS, "导入-V20211028", "JT_Order_Template");
+            return;
+        }
+
+        // Flash: COD กับไม่ใช่ COD ใช้คนละเทมเพลต → แยกไฟล์
+        const cod = exportData.filter(isCodRow);
+        const non = exportData.filter(r => !isCodRow(r));
+        if (cod.length) writeExcel(cod, FLASH_COD_HEADERS, "Order Template", "Flash_COD");
+        if (non.length) {
+            if (cod.length) setTimeout(() => writeExcel(non, FLASH_HEADERS, "Order Template", "Flash_nonCOD"), 400);
+            else writeExcel(non, FLASH_HEADERS, "Order Template", "Flash_nonCOD");
+        }
+    };
+
+    const writeExcel = (rows, headers, sheetName, filePrefix) => {
+        const XLSX = window.XLSX;
+        // หยิบเฉพาะคอลัมน์ของเทมเพลตที่ใช้ (กัน sheetjs เติมคอลัมน์ที่ไม่ได้อยู่ในเทมเพลต)
+        const picked = rows.map(r => {
+            const o = {};
+            headers.forEach(h => { o[h] = r[h] !== undefined && r[h] !== null ? r[h] : ""; });
+            return o;
+        });
+        const ws = XLSX.utils.json_to_sheet(picked, { header: headers });
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+            const addr = XLSX.utils.encode_col(C) + "1";
+            if (!ws[addr]) continue;
+            ws[addr].t = 's';
+        }
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        XLSX.writeFile(wb, `${filePrefix}_${Date.now()}.xlsx`, { bookSST: true, type: 'binary' });
+    };
+
+    // ── Keyboard shortcut: Ctrl/Cmd+D = download ──────────────────
+    useEffect(() => {
+        const handleKey = (e) => {
+            if (!data.length) return;
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+                e.preventDefault();
+                downloadExcel();
+            }
+        };
+        document.addEventListener('keydown', handleKey);
+        return () => document.removeEventListener('keydown', handleKey);
+        // eslint-disable-next-line
+    }, [data, selectedRows, carrier]);
+
+    const accent = carrier === "jt" ? "red" : "yellow";
+    const inputCls = "w-full px-4 py-3 rounded-2xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white transition-all focus:border-" + (carrier === "jt" ? "red-400" : "yellow-400");
+    const numCls = "w-full px-1 py-3 rounded-2xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white text-center transition-all focus:border-" + (carrier === "jt" ? "red-400" : "yellow-400");
+
+    const formItemQty = form.items.filter(i => String(i.name).trim() !== "").reduce((s, i) => s + (parseInt(i.qty) || 0), 0);
+
+    // ── Render ────────────────────────────────────────────────────
+    return (
+        <div className="p-4 md:p-8 flex flex-col items-center">
+            <div className="max-w-full w-full bg-white rounded-[2.5rem] shadow-2xl overflow-hidden border border-slate-200">
+
+                {/* Header */}
+                <div className={`p-8 text-center border-b shadow-sm transition-colors relative ${carrier === "jt" ? "bg-red-600 border-red-700" : "bg-yellow-400 border-yellow-500"}`}>
+                    <h1 className={`text-3xl font-black uppercase italic flex items-center justify-center gap-3 ${carrier === "jt" ? "text-white" : "text-slate-900"}`}>
+                        <span className="text-4xl">📝</span>
+                        Shipping Converter <span className={carrier === "jt" ? "text-yellow-300 drop-shadow-md" : "text-white drop-shadow-md"}>PRO</span>
+                    </h1>
+                    <p className={`font-bold text-sm mt-1 uppercase tracking-widest opacity-80 ${carrier === "jt" ? "text-red-100" : "text-yellow-900"}`}>
+                        โหมดกรอกเอง • ไม่ต้องมีไฟล์ Page365 • ได้ไฟล์ Excel แบบเดียวกัน
+                    </p>
+                    <a href="index.html" className={`absolute top-6 right-6 px-4 py-2 rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow ${carrier === "jt" ? "bg-white/15 text-white hover:bg-white/25" : "bg-white/70 text-slate-800 hover:bg-white"}`}>
+                        📤 โหมดอัปโหลดไฟล์
+                    </a>
+                </div>
+
+                {/* Carrier Tabs */}
+                <div className="flex border-b border-slate-200 bg-white">
+                    <button onClick={() => setCarrier("flash")}
+                        className={`flex-1 py-4 px-6 font-black text-sm uppercase tracking-wider transition-all border-b-4 ${carrier === "flash" ? "border-yellow-400 bg-yellow-50 text-slate-900" : "border-transparent text-slate-400 hover:text-slate-600 hover:bg-slate-50"}`}>
+                        ⚡ Flash Express
+                    </button>
+                    <button onClick={() => setCarrier("jt")}
+                        className={`flex-1 py-4 px-6 font-black text-sm uppercase tracking-wider transition-all border-b-4 ${carrier === "jt" ? "border-red-500 bg-red-50 text-slate-900" : "border-transparent text-slate-400 hover:text-slate-600 hover:bg-slate-50"}`}>
+                        🚚 J&T Express
+                    </button>
+                </div>
+
+                <div className="p-8 space-y-8">
+
+                    {/* ── ฟอร์มกรอกออเดอร์ ── */}
+                    <div ref={formRef} className={`rounded-[2.5rem] border-2 p-8 shadow-inner ${editingIndex >= 0 ? "border-amber-300 bg-amber-50/40" : carrier === "jt" ? "border-red-100 bg-gradient-to-br from-red-50 to-white" : "border-yellow-200 bg-gradient-to-br from-yellow-50 to-white"}`}>
+                        <div className="flex items-center gap-3 mb-1">
+                            <span className="text-3xl">{editingIndex >= 0 ? "✏️" : "🧾"}</span>
+                            <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">
+                                {editingIndex >= 0 ? `แก้ไขออเดอร์ #${orders[editingIndex] ? orders[editingIndex].no : ""}` : "กรอกข้อมูลออเดอร์"}
+                            </h2>
+                        </div>
+                        <p className="text-slate-500 text-sm font-medium mb-6">กรอกชื่อ เบอร์ ที่อยู่ และรายการสินค้า แล้วกด "เพิ่มออเดอร์" — ระบบจะแปลงเป็นเทมเพลตให้อัตโนมัติ</p>
+
+                        {/* วางข้อความแล้วแยกอัตโนมัติ */}
+                        <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl p-4 mb-6">
+                            <label className="block text-[10px] text-slate-400 font-black uppercase mb-2 tracking-widest">วางข้อมูลลูกค้าทั้งก้อน (ไม่บังคับ)</label>
+                            <div className="flex flex-col md:flex-row gap-3">
+                                <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={3}
+                                    placeholder={"เช่น\nสมชาย ใจดี\n089-123-4567\n99/1 หมู่ 2 ต.บางรัก อ.เมือง จ.นนทบุรี 11000"}
+                                    className="flex-1 px-4 py-3 rounded-2xl border-2 border-slate-200 outline-none font-medium text-slate-700 resize-y focus:border-slate-400"/>
+                                <button onClick={parsePasted} className="px-6 py-3 rounded-2xl bg-slate-900 text-white font-black hover:bg-slate-700 transition-all shadow active:scale-95 whitespace-nowrap">
+                                    ✨ แยกข้อมูลให้
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div>
+                                <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">เลขออเดอร์</label>
+                                <input value={form.no} onChange={e => setField('no', e.target.value)} placeholder={nextOrderNo() || "อัตโนมัติ"} className={inputCls}/>
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">ชื่อผู้รับ *</label>
+                                <input value={form.customerName} onChange={e => setField('customerName', e.target.value)} placeholder="สมชาย ใจดี" className={markCls('customerName', inputCls)}/>
+                            </div>
+                            <div>
+                                <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">เบอร์โทร *</label>
+                                <input value={form.phone} onChange={e => setField('phone', e.target.value)} placeholder="0891234567" inputMode="numeric" className={markCls('phone', inputCls)}/>
+                            </div>
+                            {/* ── ที่อยู่: กรอกรหัสไปรษณีย์ก่อน แล้ว dropdown ขึ้นเอง ── */}
+                            <div>
+                                <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">รหัสไปรษณีย์ *</label>
+                                <input value={form.postal} onChange={e => setPostal(e.target.value)} placeholder="11000" inputMode="numeric" maxLength={5}
+                                    className={markCls('postal', inputCls) + " tracking-[0.3em] text-lg"}/>
+                                <p className={`text-[10px] font-bold mt-1 ${form.postal.length === 5 ? (postalEntry ? "text-emerald-600" : "text-amber-600") : "text-slate-400"}`}>
+                                    {form.postal.length !== 5 ? "กรอกก่อน แล้วจังหวัด/อำเภอ/ตำบล จะขึ้นให้เลือกเอง"
+                                        : postalEntry ? "✓ พบในระบบ — เลือกจากรายการได้เลย"
+                                        : "⚠ ไม่พบรหัสนี้ — กรอกเองด้านขวา"}
+                                </p>
+                            </div>
+                            <div>
+                                <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">จังหวัด *</label>
+                                <select value={form.province} onChange={e => setField('province', e.target.value)} disabled={addrLocked || !!postalEntry}
+                                    className={markCls('province', inputCls) + " appearance-none disabled:bg-slate-50 disabled:text-slate-400"}>
+                                    <option value="">{addrLocked ? "— กรอกรหัสไปรษณีย์ก่อน —" : "— เลือกจังหวัด —"}</option>
+                                    {(postalEntry ? [postalEntry.p] : ALL_PROVINCES).map(p => <option key={p} value={p}>{p}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="flex items-center justify-between text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">
+                                    <span>อำเภอ / เขต *</span>
+                                    {form.customDistrict && districtOptions.length > 0 && (
+                                        <button onClick={() => setForm(f => ({ ...f, customDistrict: false, district: "" }))} className="text-slate-400 hover:text-slate-600 normal-case tracking-normal font-bold">↩ เลือกจากรายการ</button>
+                                    )}
+                                </label>
+                                {addrLocked ? (
+                                    <select disabled className={markCls('district', inputCls) + " appearance-none disabled:bg-slate-50 disabled:text-slate-400"}>
+                                        <option>— กรอกรหัสไปรษณีย์ก่อน —</option>
+                                    </select>
+                                ) : (!form.customDistrict && districtOptions.length > 0) ? (
+                                    <select value={form.district} onChange={e => setSelectField('district', 'customDistrict', e.target.value)} className={markCls('district', inputCls) + " appearance-none"}>
+                                        <option value="">— เลือกอำเภอ/เขต —</option>
+                                        {districtOptions.map(d => <option key={d} value={d}>{form.province === "กรุงเทพมหานคร" ? `เขต${d}` : d}</option>)}
+                                        <option value={CUSTOM}>+ พิมพ์เอง…</option>
+                                    </select>
+                                ) : (
+                                    <input value={form.district} onChange={e => setField('district', e.target.value)} placeholder="เมืองนนทบุรี" className={markCls('district', inputCls)}/>
+                                )}
+                            </div>
+                            <div>
+                                <label className="flex items-center justify-between text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">
+                                    <span>ตำบล / แขวง *</span>
+                                    {form.customSubdistrict && subdistrictOptions.length > 0 && (
+                                        <button onClick={() => setForm(f => ({ ...f, customSubdistrict: false, subdistrict: "" }))} className="text-slate-400 hover:text-slate-600 normal-case tracking-normal font-bold">↩ เลือกจากรายการ</button>
+                                    )}
+                                </label>
+                                {addrLocked ? (
+                                    <select disabled className={markCls('subdistrict', inputCls) + " appearance-none disabled:bg-slate-50 disabled:text-slate-400"}>
+                                        <option>— กรอกรหัสไปรษณีย์ก่อน —</option>
+                                    </select>
+                                ) : (!form.customSubdistrict && subdistrictOptions.length > 0) ? (
+                                    <select value={form.subdistrict} onChange={e => setSelectField('subdistrict', 'customSubdistrict', e.target.value)} className={markCls('subdistrict', inputCls) + " appearance-none"}>
+                                        <option value="">— เลือกตำบล/แขวง —</option>
+                                        {subdistrictOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                                        <option value={CUSTOM}>+ พิมพ์เอง…</option>
+                                    </select>
+                                ) : (
+                                    <input value={form.subdistrict} onChange={e => setField('subdistrict', e.target.value)} placeholder="บางรัก" className={markCls('subdistrict', inputCls)}/>
+                                )}
+                            </div>
+                            <div className="md:col-span-4">
+                                <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">ที่อยู่ (บ้านเลขที่ หมู่ ซอย ถนน) *</label>
+                                <textarea value={form.addrLine} onChange={e => setField('addrLine', e.target.value)} rows={2}
+                                    placeholder="99/1 หมู่ 2 ซอยสุขใจ ถนนติวานนท์"
+                                    className={markCls('addrLine', inputCls) + " resize-y"}/>
+                            </div>
+                        </div>
+
+                        {/* ที่อยู่เต็มที่จะถูกใช้จริง */}
+                        {addrPreview && (
+                            <div className="mt-4 bg-white border-2 border-slate-200 rounded-2xl px-4 py-3">
+                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">ที่อยู่ที่จะใช้: </span>
+                                <span className="font-bold text-slate-700 text-sm">{addrPreview}</span>
+                            </div>
+                        )}
+
+                        {/* ── พัสดุ: น้ำหนัก + ขนาด (ของทั้งกล่อง) ── */}
+                        <div className="mt-4 bg-white border-2 border-slate-200 rounded-2xl px-4 py-4">
+                            <div className="text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">📦 พัสดุ (ทั้งกล่อง)</div>
+                            <div className="flex flex-wrap items-end gap-4">
+                                <div>
+                                    <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">น้ำหนัก (กก.) *</label>
+                                    <input type="number" step="0.01" min="0" value={form.weight} onChange={e => setField('weight', e.target.value)} placeholder="0.00" className={markCls('weight', numCls) + " w-28"}/>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">ขนาด กว้าง × ยาว × สูง (ซม.) *</label>
+                                    <div className="flex items-center gap-2">
+                                        <input type="number" min="0" value={form.width} onChange={e => setField('width', e.target.value)} placeholder="กว้าง" className={markCls('width', numCls) + " w-20"} title="กว้าง (ซม.)"/>
+                                        <span className="text-slate-300 font-black">×</span>
+                                        <input type="number" min="0" value={form.length} onChange={e => setField('length', e.target.value)} placeholder="ยาว" className={markCls('length', numCls) + " w-20"} title="ยาว (ซม.)"/>
+                                        <span className="text-slate-300 font-black">×</span>
+                                        <input type="number" min="0" value={form.height} onChange={e => setField('height', e.target.value)} placeholder="สูง" className={markCls('height', numCls) + " w-20"} title="สูง (ซม.)"/>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">ประเภทสินค้า</label>
+                                    <select value={form.itemType} onChange={e => setField('itemType', e.target.value)} className={inputCls + " appearance-none w-44"}>
+                                        {ITEM_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                                    </select>
+                                </div>
+                                {carrier === "flash" && (
+                                    <div>
+                                        <label className="block text-[10px] text-slate-400 font-black uppercase mb-1 tracking-widest">รูปแบบขนส่ง</label>
+                                        <select value={form.productType} onChange={e => setField('productType', e.target.value)} className={inputCls + " appearance-none w-48"}>
+                                            {PRODUCT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* COD */}
+                        <div className={`mt-4 flex flex-wrap items-center gap-4 border-2 rounded-2xl px-4 py-3 transition-all ${form.isCod ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-200"}`}>
+                            <label className="flex items-center gap-3 cursor-pointer select-none">
+                                <input type="checkbox" checked={form.isCod}
+                                    onChange={e => setForm(f => ({ ...f, isCod: e.target.checked, amount: e.target.checked ? f.amount : "" }))}
+                                    className="w-5 h-5 accent-emerald-500 cursor-pointer"/>
+                                <span className="font-black text-slate-700">💰 เก็บเงินปลายทาง (COD)</span>
+                            </label>
+                            {form.isCod ? (
+                                <div className="flex items-center gap-2">
+                                    <input type="number" value={form.amount} onChange={e => setField('amount', e.target.value)} placeholder="0"
+                                        className={"w-40 px-4 py-2.5 rounded-xl border-2 outline-none font-black text-slate-800 bg-white text-lg " + (showMissing && missing.amount ? "border-red-400 bg-red-50" : "border-emerald-300")}/>
+                                    <span className="font-bold text-slate-400 text-sm">บาท</span>
+                                </div>
+                            ) : (
+                                <span className="text-slate-400 text-xs font-bold">ไม่ใช่ COD — ยอดเงินและรายการสินค้าไม่ต้องกรอกก็ได้</span>
+                            )}
+                        </div>
+
+                        {/* รายการสินค้า */}
+                        <div className="mt-6">
+                            <label className="block text-[10px] text-slate-400 font-black uppercase mb-2 tracking-widest">
+                                รายการสินค้า {form.isCod ? "*" : <span className="text-slate-300">(ไม่บังคับ)</span>}
+                            </label>
+                            <div className="hidden md:grid grid-cols-[1fr_10rem_7rem_5rem_3rem] gap-2 px-2 mb-1 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                <span>ชื่อสินค้า</span><span>สี / ตัวเลือก</span><span>ขนาด</span><span className="text-center">จำนวน</span><span></span>
+                            </div>
+                            <div className="space-y-2">
+                                {form.items.map((it, idx) => (
+                                    <div key={idx} className="grid grid-cols-1 md:grid-cols-[1fr_10rem_7rem_5rem_3rem] gap-2">
+                                        <input value={it.name} onChange={e => setItem(idx, 'name', e.target.value)} placeholder="ชื่อสินค้า / รหัส" className={markCls('items', inputCls)}/>
+                                        <input value={it.variant} onChange={e => setItem(idx, 'variant', e.target.value)} placeholder="สี / ตัวเลือก" className={inputCls}/>
+                                        <input value={it.size || ""} onChange={e => setItem(idx, 'size', e.target.value)} placeholder="เช่น M" className={inputCls} title="ขนาด/ไซซ์ (ใช้ในคอลัมน์ Item description ของ Flash COD)"/>
+                                        <input type="number" min="1" value={it.qty} onChange={e => setItem(idx, 'qty', e.target.value)} className={numCls} title="จำนวน (ชิ้น)"/>
+                                        <button onClick={() => removeItem(idx)} disabled={form.items.length === 1}
+                                            className="px-3 py-3 rounded-2xl border-2 border-slate-200 text-slate-400 font-black hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-all disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
+                                            ✕
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3 mt-2">
+                                <button onClick={addItem} className="px-5 py-2 rounded-xl border-2 border-slate-300 text-slate-600 font-black text-sm hover:bg-slate-100 transition-all">
+                                    + เพิ่มสินค้า
+                                </button>
+                                {formItemQty > 0 && <span className="text-xs font-bold text-slate-400">รวม {formItemQty} ชิ้น</span>}
+                            </div>
+                        </div>
+
+                        {showMissing && missingLabels.length > 0 && (
+                            <div className="mt-4 bg-red-50 border-2 border-red-300 rounded-2xl p-4 text-red-700 font-bold text-sm flex items-start gap-2">
+                                <span className="text-xl leading-none">⚠️</span>
+                                <span>ยังขาดข้อมูลที่ต้องกรอก ({missingLabels.length}) — ช่องสีแดงด้านบน: {missingLabels.join(" · ")}</span>
+                            </div>
+                        )}
+                        {showMissing && missingLabels.length === 0 && (
+                            <div className="mt-4 bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-4 text-emerald-700 font-bold text-sm flex items-center gap-2">
+                                <span className="text-xl leading-none">✓</span> ข้อมูลครบแล้ว — กด "เพิ่มออเดอร์" ได้เลย
+                            </div>
+                        )}
+
+                        <div className="flex flex-wrap gap-3 mt-6">
+                            <button onClick={submitOrder}
+                                className={`px-10 py-4 rounded-[1.5rem] font-black uppercase transition-all shadow-xl active:scale-95 ${carrier === "jt" ? "bg-red-500 text-white hover:bg-red-400" : "bg-yellow-400 text-slate-900 hover:bg-yellow-300"}`}>
+                                {editingIndex >= 0 ? "💾 บันทึกการแก้ไข" : "➕ เพิ่มออเดอร์"}
+                            </button>
+                            <button onClick={resetForm} className="px-8 py-4 rounded-[1.5rem] border-2 border-slate-300 text-slate-500 font-black hover:bg-slate-100 transition-all">
+                                {editingIndex >= 0 ? "ยกเลิก" : "ล้างฟอร์ม"}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* ── รายการออเดอร์ที่กรอกไว้ ── */}
+                    {orders.length > 0 && (
+                        <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="flex items-center justify-between px-6 py-4 bg-slate-50 border-b border-slate-200">
+                                <h3 className="font-black text-slate-800 uppercase tracking-tight text-sm">📋 ออเดอร์ที่กรอกไว้ ({orders.length})</h3>
+                                <button onClick={() => askConfirm("ล้างออเดอร์ทั้งหมด?", `จะลบออเดอร์ที่กรอกไว้ทั้งหมด ${orders.length} รายการ — ย้อนกลับไม่ได้`, () => { setOrders([]); resetForm(); }, { confirmLabel: "ล้างทั้งหมด" })}
+                                    className="px-4 py-2 rounded-xl border-2 border-slate-300 text-slate-500 font-bold text-xs hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-all">
+                                    ล้างทั้งหมด
+                                </button>
+                            </div>
+                            <div className="divide-y divide-slate-100 max-h-[420px] overflow-y-auto">
+                                {orders.map((o, i) => (
+                                    <div key={i} className={`flex flex-wrap items-center gap-3 px-6 py-4 hover:bg-yellow-50 transition-colors ${editingIndex === i ? "bg-amber-50" : ""}`}>
+                                        <span className="w-10 text-center text-xs font-black text-slate-300">{i + 1}</span>
+                                        <div className="flex-1 min-w-[220px]">
+                                            <div className="font-black text-slate-800 text-sm flex flex-wrap items-center gap-2">
+                                                <span>{o.no} · {o.customerName}</span>
+                                                <span className="text-slate-400 font-bold">{o.phone}</span>
+                                                {o.isCod && <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-widest">COD {Number(o.amount).toLocaleString()} ฿</span>}
+                                            </div>
+                                            <div className="text-xs text-slate-500 font-medium truncate">{o.address}</div>
+                                            <div className="text-xs text-slate-400 font-bold mt-0.5">
+                                                <span className="text-slate-500">📦 {num(o.weight, DEFAULT_PARCEL.weight).toFixed(2)} กก. · {num(o.width, DEFAULT_PARCEL.width)}×{num(o.length, DEFAULT_PARCEL.length)}×{num(o.height, DEFAULT_PARCEL.height)} ซม.</span>
+                                                {o.items.length ? " · " + o.items.map(it => `${it.qty}× ${it.name}${it.variant ? ` (${it.variant})` : ""}`).join(" · ") : ""}
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => editOrder(i)} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-black text-xs hover:bg-slate-200 transition-all">แก้ไข</button>
+                                            <button onClick={() => duplicateOrder(i)} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-black text-xs hover:bg-slate-200 transition-all">ทำซ้ำ</button>
+                                            <button onClick={() => deleteOrder(i)} className="px-3 py-1.5 rounded-lg bg-red-50 text-red-500 font-black text-xs hover:bg-red-100 transition-all">ลบ</button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {orders.length === 0 && (
+                        <div className="border-4 border-dashed border-slate-200 rounded-[3rem] p-16 text-center shadow-inner">
+                            <div className="text-6xl mb-3">🧾</div>
+                            <h3 className="text-slate-800 font-black text-2xl tracking-tighter uppercase">ยังไม่มีออเดอร์</h3>
+                            <p className="text-slate-400 text-sm font-medium mt-2">กรอกข้อมูลด้านบนแล้วกด "เพิ่มออเดอร์" เพื่อสร้างเทมเพลต</p>
+                        </div>
+                    )}
+
+                    {/* ── ผลลัพธ์ + Export ── */}
+                    {data.length > 0 && (
+                        <div className="space-y-6">
+                            {/* Action bar */}
+                            <div className="flex flex-col lg:flex-row items-center gap-8 bg-slate-900 rounded-[2.5rem] p-10 shadow-2xl relative overflow-hidden sticky top-4 z-50">
+                                <div className={`absolute top-0 right-0 w-64 h-64 rounded-full blur-3xl -mr-20 -mt-20 ${carrier === "jt" ? "bg-red-500/15" : "bg-yellow-400/10"}`}></div>
+                                <div className="text-center lg:text-left flex-1 z-10 text-white">
+                                    <h3 className="font-black text-3xl tracking-tight mb-1 uppercase italic">Ready to Export!</h3>
+                                    <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">
+                                        {carrier === "jt"
+                                            ? "เทมเพลต J&T Express พร้อมแล้ว — ตรวจสอบที่อยู่ก่อนดาวน์โหลด"
+                                            : codRows.length && nonCodRows.length
+                                            ? `Flash — จะได้ 2 ไฟล์: COD ${codRows.length} รายการ · ไม่ใช่ COD ${nonCodRows.length} รายการ`
+                                            : codRows.length
+                                            ? `Flash — เทมเพลต COD (${codRows.length} รายการ)`
+                                            : `Flash — เทมเพลตไม่ใช่ COD (${nonCodRows.length} รายการ)`}
+                                    </p>
+                                </div>
+                                <div className="flex flex-col sm:flex-row gap-4 w-full lg:w-auto z-10">
+                                    <button onClick={downloadExcel} className={`px-12 py-5 rounded-[1.5rem] font-black flex items-center justify-center gap-3 transition-all shadow-xl active:scale-95 text-lg uppercase ${carrier === "jt" ? "bg-red-500 text-white hover:bg-red-400" : "bg-yellow-400 text-slate-900 hover:bg-yellow-300"}`}>
+                                        Download Excel
+                                        {selectedRows.size < data.length && (
+                                            <span className={`text-xs font-black px-2 py-0.5 rounded-full ${carrier === "jt" ? "bg-white text-red-500" : "bg-slate-900 text-yellow-400"}`}>{selectedRows.size}/{data.length}</span>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Summary Stats */}
+                            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">รายการทั้งหมด</div>
+                                    <div className="text-2xl font-black text-slate-800 mt-1">{data.length}</div>
+                                </div>
+                                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">เลือกไว้</div>
+                                    <div className={`text-2xl font-black mt-1 ${carrier === "jt" ? "text-red-500" : "text-yellow-500"}`}>{selectedRows.size}</div>
+                                </div>
+                                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">น้ำหนักรวม</div>
+                                    <div className="text-2xl font-black text-slate-800 mt-1">{totalWeight.toFixed(2)} <span className="text-sm">kg</span></div>
+                                </div>
+                                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">ยอด COD รวม</div>
+                                    <div className="text-2xl font-black text-emerald-600 mt-1">{totalCod.toLocaleString()} <span className="text-sm">฿</span></div>
+                                </div>
+                                <div className={`border rounded-2xl p-4 shadow-sm ${totalIssues > 0 ? "bg-amber-50 border-amber-300" : "bg-emerald-50 border-emerald-200"}`}>
+                                    <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{totalIssues > 0 ? "ต้องตรวจสอบ" : "พร้อม Export"}</div>
+                                    <div className={`text-2xl font-black mt-1 ${totalIssues > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+                                        {totalIssues > 0 ? `⚠ ${totalIssues}` : "✓ OK"}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {overLimit && carrier === "jt" && (
+                                <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 flex items-center gap-3 text-amber-800 font-bold text-sm">
+                                    <span className="text-2xl">⚠️</span>
+                                    <span>J&T รับสูงสุด 1,000 รายการต่อครั้ง — คุณมี <b>{data.length}</b> รายการ ควรแบ่งดาวน์โหลดเป็นหลายครั้ง</span>
+                                </div>
+                            )}
+
+                            {/* Top Scroll */}
+                            <div ref={topScrollRef} onScroll={() => handleScrollSync('top')} className="overflow-x-auto h-3 bg-slate-200 rounded-full mb-2 border border-slate-300">
+                                <div style={{ width: totalTableWidth, height: '1px' }}></div>
+                            </div>
+
+                            {/* Table */}
+                            <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-inner overflow-hidden">
+                                <div ref={tableContainerRef} onScroll={() => handleScrollSync('table')} onMouseDown={handleMouseDown} className="overflow-x-auto grab-cursor">
+                                    <table className="text-left border-collapse table-fixed select-none" style={{ width: totalTableWidth }}>
+                                        <thead className="bg-slate-800 text-white text-[10px] font-black uppercase tracking-tighter sticky top-0 z-40">
+                                            <tr>
+                                                <th className="p-3 sticky left-0 z-50 bg-slate-950 border-r-2 border-slate-600 text-center" style={{ width: colWidths[0] }}>
+                                                    <div className="flex flex-col items-center gap-1">
+                                                        <input type="checkbox"
+                                                            checked={selectedRows.size === data.length}
+                                                            onChange={e => setSelectedRows(e.target.checked ? new Set(data.map((_,i)=>i)) : new Set())}
+                                                            className="w-4 h-4 accent-yellow-400 cursor-pointer" />
+                                                        <span className="text-[9px] text-slate-400 uppercase tracking-widest">ทั้งหมด</span>
+                                                    </div>
+                                                    <div onMouseDown={(e) => onResizeStart(0, e)} className="resize-handle" />
+                                                </th>
+                                                {headersForExport.map((h, i) => {
+                                                    const colIdx = i + 1;
+                                                    let stickyStyle = {};
+                                                    let borderClass = "";
+                                                    let bgClass = "bg-slate-800";
+                                                    if (i === 0) { stickyStyle = { position:'sticky', left:colWidths[0], zIndex:50 }; bgClass="bg-slate-900"; borderClass="border-r-2 border-slate-600"; }
+                                                    else if (i === 1) { stickyStyle = { position:'sticky', left:colWidths[0]+colWidths[1], zIndex:50 }; bgClass="bg-slate-900"; borderClass="border-r-2 border-slate-400 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.3)]"; }
+                                                    return (
+                                                        <th key={i} className={`p-4 whitespace-pre relative ${bgClass} ${borderClass}`} style={{ width: colWidths[colIdx], ...stickyStyle }}>
+                                                            {h}
+                                                            <div onMouseDown={(e) => onResizeStart(colIdx, e)} className="resize-handle" />
+                                                        </th>
+                                                    );
+                                                })}
+                                            </tr>
+                                        </thead>
+                                        <tbody className="text-xs">
+                                            {data.map((row, rowIndex) => {
+                                                const isEven = rowIndex % 2 === 0;
+                                                const frozenBg = isEven ? "bg-slate-100" : "bg-slate-200";
+                                                const isChecked = selectedRows.has(rowIndex);
+                                                const issues = rowIssues[rowIndex] || [];
+                                                const hasIssue = issues.length > 0;
+                                                return (
+                                                    <tr key={rowIndex} className={`${isChecked ? (isEven ? 'bg-white' : 'bg-slate-50') : 'bg-red-50 opacity-60'} border-b hover:bg-yellow-50 transition-colors group`}>
+                                                        <td className={`p-2 text-center border-r-2 sticky left-0 z-10 ${hasIssue ? "border-amber-400 border-l-4 border-l-amber-400" : "border-slate-200"} ${isChecked ? frozenBg : 'bg-red-100'} group-hover:bg-yellow-100`}
+                                                            title={hasIssue ? "⚠ " + issues.join(", ") : ""}>
+                                                            <div className="flex flex-col items-center gap-1">
+                                                                <input type="checkbox"
+                                                                    checked={isChecked}
+                                                                    onChange={e => {
+                                                                        const next = new Set(selectedRows);
+                                                                        e.target.checked ? next.add(rowIndex) : next.delete(rowIndex);
+                                                                        setSelectedRows(next);
+                                                                    }}
+                                                                    className="w-4 h-4 accent-yellow-400 cursor-pointer" />
+                                                                <span className={`text-[10px] font-black ${hasIssue ? "text-amber-600" : "text-slate-400"}`}>{hasIssue ? "⚠" : ""}{rowIndex + 1}</span>
+                                                            </div>
+                                                        </td>
+                                                        {headersForExport.map((h, i) => {
+                                                            let stickyStyle = {};
+                                                            let borderClass = "border-r border-slate-100";
+                                                            let currentCellBg = isEven ? "bg-white" : "bg-slate-50";
+                                                            if (i === 0) { stickyStyle={position:'sticky',left:colWidths[0],zIndex:10}; borderClass="border-r-2 border-slate-200"; currentCellBg=frozenBg; }
+                                                            else if (i === 1) { stickyStyle={position:'sticky',left:colWidths[0]+colWidths[1],zIndex:10}; borderClass="border-r-2 border-slate-300 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)]"; currentCellBg=frozenBg; }
+                                                            const content = String(row[h] ?? "");
+                                                            const lineCount = content.split('\n').length;
+                                                            const isRemark1 = i === remarkIdx;
+                                                            const dynamicRows = i === 0 ? Math.max(1, Math.min(lineCount, 8)) : (i === 2 || isRemark1 ? 2 : 1);
+                                                            return (
+                                                                <td key={i} className={`p-1 ${borderClass} ${currentCellBg} group-hover:bg-yellow-100`} style={stickyStyle}>
+                                                                    <textarea
+                                                                        value={content}
+                                                                        onChange={(e) => { const nd=[...data]; nd[rowIndex]={...nd[rowIndex], [h]:e.target.value}; setData(nd); }}
+                                                                        rows={isRemark1 ? 1 : dynamicRows}
+                                                                        className={`w-full bg-transparent p-1 outline-none focus:bg-white rounded-lg resize-none font-medium text-slate-600 transition-all group-hover:text-slate-900 ${i===0||isRemark1?"font-bold":""} ${isRemark1?"whitespace-nowrap overflow-x-auto":""}`}
+                                                                        style={isRemark1?{overflowWrap:'normal',overflowX:'auto'}:{}}
+                                                                    />
+                                                                </td>
+                                                            );
+                                                        })}
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <p className="text-center text-[11px] text-slate-400 font-bold">
+                                แก้ไขในตารางได้โดยตรง — แต่ถ้าเพิ่ม/แก้ออเดอร์ด้านบน ตารางจะถูกสร้างใหม่ทั้งหมด
+                            </p>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* กล่องยืนยัน (แทน confirm/alert ของเบราว์เซอร์) */}
+            {dialog && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 p-4"
+                    onClick={() => setDialog(null)}>
+                    <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md p-8" onClick={e => e.stopPropagation()}>
+                        <h3 className="text-xl font-black text-slate-800 tracking-tight mb-2">{dialog.title}</h3>
+                        <p className="text-slate-500 font-medium text-sm whitespace-pre-line mb-7">{dialog.message}</p>
+                        <div className="flex flex-wrap gap-3 justify-end">
+                            {dialog.onConfirm && (
+                                <button onClick={() => setDialog(null)}
+                                    className="px-6 py-3 rounded-2xl border-2 border-slate-300 text-slate-500 font-black hover:bg-slate-100 transition-all">
+                                    ยกเลิก
+                                </button>
+                            )}
+                            <button autoFocus
+                                onClick={() => { const fn = dialog.onConfirm; setDialog(null); if (fn) fn(); }}
+                                className={`px-6 py-3 rounded-2xl font-black text-white transition-all shadow-lg active:scale-95 ${dialog.danger ? "bg-red-500 hover:bg-red-400" : "bg-slate-900 hover:bg-slate-700"}`}>
+                                {dialog.confirmLabel}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
