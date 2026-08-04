@@ -27,5 +27,9 @@ window.APP_CONFIG = {
 
     // อีเมลแอดมิน — ใช้แค่ซ่อน/แสดงปุ่มในหน้าเว็บ
     // สิทธิ์จริงบังคับที่ firestore.rules (ต้องใส่อีเมลชุดเดียวกันที่นั่นด้วย)
-    adminEmails: ["biiigooo76@gmail.com"]
+    adminEmails: [
+        "biiigooo76@gmail.com",
+        "lamsanggroup@gmail.com",
+        "fangtunyaluk09@gmail.com"
+    ]
 };
