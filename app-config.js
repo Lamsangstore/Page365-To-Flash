@@ -23,7 +23,7 @@ window.APP_CONFIG = {
 
     // URL ของ Cloudflare Worker ที่ยิงแจ้งเตือน LINE
     // เว้นว่างไว้ = ไม่ส่งแจ้งเตือน (ระบบอื่นยังทำงานปกติ)
-    lineWorkerUrl: "",
+    lineWorkerUrl: "https://page365-to-flash.biiigooo76.workers.dev",
 
     // อีเมลแอดมิน — ใช้แค่ซ่อน/แสดงปุ่มในหน้าเว็บ
     // สิทธิ์จริงบังคับที่ firestore.rules (ต้องใส่อีเมลชุดเดียวกันที่นั่นด้วย)
