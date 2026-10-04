@@ -6,6 +6,19 @@
     <title>กรอกข้อมูลจัดส่ง</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📮</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // ธีมกลาง Lamsang (LAMSANG-THEME.md) — สีแบรนด์ทอง + แถบมืด
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#faf6ec', 100: '#f3ead4', 200: '#e7d5a8', 300: '#d9bf7d', 400: '#ccac60', 500: '#bf9c4f', 600: '#a8853f', 700: '#886a32', 800: '#6b5329', 900: '#4a3a1d' },
+                        panel: { 700: '#3a3833', 800: '#2a2825', 900: '#1c1b19' }
+                    }
+                }
+            }
+        };
+    </script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -16,8 +29,8 @@
     <script src="postal-db.js"></script>
     <script src="order-core.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Anuphan:wght@300;400;600;700&display=swap');
-        body { font-family: 'Anuphan', sans-serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap');
+        body { font-family: 'Noto Sans Thai', system-ui, -apple-system, sans-serif; }
     </style>
 </head>
 <body class="bg-slate-100 min-h-screen">
@@ -111,8 +124,8 @@ const App = () => {
     const markCls = (key, base) => base + (showMissing && missing[key] ? " !border-red-400 !bg-red-50" : "");
     const addrPreview = C.composeAddress(form);
 
-    const inputCls = "w-full px-4 py-3 rounded-2xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white transition-all focus:border-sky-400";
-    const numCls = "w-full px-1 py-3 rounded-2xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white text-center transition-all focus:border-sky-400";
+    const inputCls = "w-full px-4 py-3 rounded-2xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white transition-all focus:border-brand-600";
+    const numCls = "w-full px-1 py-3 rounded-2xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white text-center transition-all focus:border-brand-600";
 
     // ── ส่งข้อมูล ────────────────────────────────────────────────
     const submit = async () => {
@@ -169,7 +182,7 @@ const App = () => {
                         <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">เลขอ้างอิง</div>
                         <div className="text-4xl font-black text-slate-800 tracking-widest mt-1">{refNo}</div>
                     </div>
-                    <button onClick={startNew} className="px-8 py-4 rounded-2xl bg-slate-900 text-white font-black hover:bg-slate-700 transition-all shadow-lg">
+                    <button onClick={startNew} className="px-8 py-4 rounded-2xl bg-brand-600 text-white font-black hover:bg-brand-700 transition-all shadow-lg">
                         กรอกอีกรายการ
                     </button>
                 </div>
@@ -181,11 +194,11 @@ const App = () => {
         <div className="p-4 md:p-8 flex justify-center" ref={topRef}>
             <div className="max-w-3xl w-full bg-white rounded-[2.5rem] shadow-2xl overflow-hidden border border-slate-200">
 
-                <div className="p-8 text-center bg-sky-500 border-b border-sky-600">
+                <div className="p-8 text-center bg-brand-600 border-b border-brand-700">
                     <h1 className="text-2xl md:text-3xl font-black text-white flex items-center justify-center gap-3">
                         <span className="text-4xl">📮</span> กรอกข้อมูลจัดส่ง
                     </h1>
-                    <p className="font-bold text-sm mt-1 text-sky-100">{CFG.shopName}</p>
+                    <p className="font-bold text-sm mt-1 text-brand-100">{CFG.shopName}</p>
                 </div>
 
                 <div className="p-6 md:p-8 space-y-5">
@@ -195,8 +208,8 @@ const App = () => {
                         <div className="flex flex-col md:flex-row gap-3">
                             <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={3}
                                 placeholder={"เช่น\nสมชาย ใจดี\n089-123-4567\n99/1 หมู่ 2 ต.บางรัก อ.เมือง จ.นนทบุรี 11000"}
-                                className="flex-1 px-4 py-3 rounded-2xl border-2 border-slate-200 outline-none font-medium text-slate-700 resize-y focus:border-slate-400"/>
-                            <button onClick={parsePasted} className="px-6 py-3 rounded-2xl bg-slate-900 text-white font-black hover:bg-slate-700 transition-all shadow active:scale-95 whitespace-nowrap">
+                                className="flex-1 px-4 py-3 rounded-2xl border-2 border-slate-200 outline-none font-medium text-slate-700 resize-y focus:border-brand-600"/>
+                            <button onClick={parsePasted} className="px-6 py-3 rounded-2xl bg-brand-600 text-white font-black hover:bg-brand-700 transition-all shadow active:scale-95 whitespace-nowrap">
                                 ✨ แยกข้อมูลให้
                             </button>
                         </div>
@@ -375,7 +388,7 @@ const App = () => {
 
                     {/* PDPA */}
                     <label className="flex items-start gap-3 cursor-pointer select-none bg-slate-50 border-2 border-slate-200 rounded-2xl p-4">
-                        <input type="checkbox" checked={consent} onChange={e => { setConsent(e.target.checked); setErrorMsg(""); }} className="w-5 h-5 mt-0.5 accent-sky-500 cursor-pointer"/>
+                        <input type="checkbox" checked={consent} onChange={e => { setConsent(e.target.checked); setErrorMsg(""); }} className="w-5 h-5 mt-0.5 accent-brand-600 cursor-pointer"/>
                         <span className="text-xs text-slate-500 font-medium">
                             ยินยอมให้ <b className="text-slate-700">{CFG.shopName}</b> เก็บและใช้ชื่อ เบอร์โทร และที่อยู่ของฉัน
                             เพื่อจัดส่งพัสดุนี้เท่านั้น และจะถูกลบเมื่อไม่จำเป็นต้องใช้แล้ว
@@ -383,7 +396,7 @@ const App = () => {
                     </label>
 
                     <button onClick={submit} disabled={status === "sending" || !ready}
-                        className="w-full px-10 py-5 rounded-[1.5rem] font-black uppercase text-lg transition-all shadow-xl active:scale-95 bg-sky-500 text-white hover:bg-sky-400 disabled:opacity-50 disabled:active:scale-100">
+                        className="w-full px-10 py-5 rounded-[1.5rem] font-black uppercase text-lg transition-all shadow-xl active:scale-95 bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:active:scale-100">
                         {status === "sending" ? "กำลังส่ง…" : !ready ? "กำลังเชื่อมต่อ…" : "📤 ส่งข้อมูลให้ร้าน"}
                     </button>
                 </div>
