@@ -6,6 +6,19 @@
     <title>Admin — ตรวจออเดอร์ & Export</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // ธีมกลาง Lamsang (LAMSANG-THEME.md) — สีแบรนด์ทอง + แถบมืด
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#faf6ec', 100: '#f3ead4', 200: '#e7d5a8', 300: '#d9bf7d', 400: '#ccac60', 500: '#bf9c4f', 600: '#a8853f', 700: '#886a32', 800: '#6b5329', 900: '#4a3a1d' },
+                        panel: { 700: '#3a3833', 800: '#2a2825', 900: '#1c1b19' }
+                    }
+                }
+            }
+        };
+    </script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -17,8 +30,8 @@
     <script src="postal-db.js"></script>
     <script src="order-core.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Anuphan:wght@300;400;600;700&display=swap');
-        body { font-family: 'Anuphan', sans-serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap');
+        body { font-family: 'Noto Sans Thai', system-ui, -apple-system, sans-serif; }
     </style>
 </head>
 <body class="bg-slate-100 min-h-screen">
@@ -82,8 +95,8 @@ const OrderForm = ({ initial, onSave, onCancel, saving }) => {
     const missingLabels = C.missingLabelsOf(missing);
     const markCls = (key, base) => base + (showMissing && missing[key] ? " !border-red-400 !bg-red-50" : "");
 
-    const inputCls = "w-full px-3 py-2.5 rounded-xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white text-sm transition-all focus:border-slate-500";
-    const numCls = "w-full px-1 py-2.5 rounded-xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white text-sm text-center transition-all focus:border-slate-500";
+    const inputCls = "w-full px-3 py-2.5 rounded-xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white text-sm transition-all focus:border-brand-600";
+    const numCls = "w-full px-1 py-2.5 rounded-xl border-2 border-slate-200 outline-none font-bold text-slate-700 bg-white text-sm text-center transition-all focus:border-brand-600";
 
     const save = () => {
         if (missingLabels.length > 0) { setShowMissing(true); return; }
@@ -216,7 +229,7 @@ const OrderForm = ({ initial, onSave, onCancel, saving }) => {
             )}
 
             <div className="flex gap-3">
-                <button onClick={save} disabled={saving} className="px-8 py-3 rounded-xl bg-slate-900 text-white font-black hover:bg-slate-700 transition-all shadow disabled:opacity-50">
+                <button onClick={save} disabled={saving} className="px-8 py-3 rounded-xl bg-brand-600 text-white font-black hover:bg-brand-700 transition-all shadow disabled:opacity-50">
                     {saving ? "กำลังบันทึก…" : "💾 บันทึก"}
                 </button>
                 <button onClick={onCancel} className="px-6 py-3 rounded-xl border-2 border-slate-300 text-slate-500 font-black hover:bg-slate-100">ยกเลิก</button>
@@ -320,7 +333,7 @@ const App = () => {
                     <h1 className="text-2xl font-black text-slate-800 mb-2">Admin</h1>
                     <p className="text-slate-500 font-medium mb-8">เข้าสู่ระบบด้วยบัญชี Google ของแอดมิน</p>
                     <button onClick={() => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())}
-                        className="w-full px-8 py-4 rounded-2xl bg-slate-900 text-white font-black hover:bg-slate-700 transition-all shadow-lg">
+                        className="w-full px-8 py-4 rounded-2xl bg-brand-600 text-white font-black hover:bg-brand-700 transition-all shadow-lg">
                         เข้าสู่ระบบด้วย Google
                     </button>
                 </div>
@@ -332,7 +345,7 @@ const App = () => {
         <div className="p-4 md:p-8 flex justify-center">
             <div className="max-w-7xl w-full bg-white rounded-[2.5rem] shadow-2xl overflow-hidden border border-slate-200">
 
-                <div className="p-6 bg-slate-900 flex flex-wrap items-center gap-4">
+                <div className="p-6 bg-panel-900 flex flex-wrap items-center gap-4">
                     <h1 className="text-xl font-black text-white flex items-center gap-2"><span className="text-2xl">🗂️</span> ออเดอร์จากลูกค้า</h1>
                     <div className="flex-1"></div>
                     <span className="text-slate-400 font-bold text-xs">{user.email}</span>
@@ -350,7 +363,7 @@ const App = () => {
                 <div className="p-5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-3">
                     {["pending", "verified", "exported", "all"].map(k => (
                         <button key={k} onClick={() => { setFilter(k); setSelected(new Set()); }}
-                            className={`px-4 py-2 rounded-xl font-black text-xs transition-all border-2 ${filter === k ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-100"}`}>
+                            className={`px-4 py-2 rounded-xl font-black text-xs transition-all border-2 ${filter === k ? "bg-brand-600 text-white border-brand-600" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-100"}`}>
                             {k === "all" ? "ทั้งหมด" : STATUS[k].label} ({counts[k]})
                         </button>
                     ))}
@@ -361,7 +374,7 @@ const App = () => {
                     </div>
                     <button onClick={() => setAdding(true)} className="px-4 py-2 rounded-xl border-2 border-slate-300 text-slate-600 font-black text-xs hover:bg-slate-100">+ เพิ่มออเดอร์เอง</button>
                     <button onClick={download} disabled={!selectedOrders.length}
-                        className="px-6 py-2.5 rounded-xl bg-slate-900 text-white font-black text-sm hover:bg-slate-700 transition-all shadow disabled:opacity-40">
+                        className="px-6 py-2.5 rounded-xl bg-brand-600 text-white font-black text-sm hover:bg-brand-700 transition-all shadow disabled:opacity-40">
                         ⬇ Download Excel {selectedOrders.length > 0 && `(${selectedOrders.length})`}
                     </button>
                 </div>
@@ -375,7 +388,7 @@ const App = () => {
                         <label className="flex items-center gap-2 px-2 text-xs font-black text-slate-400 uppercase tracking-widest cursor-pointer select-none">
                             <input type="checkbox" checked={selected.size === shown.length && shown.length > 0}
                                 onChange={e => setSelected(e.target.checked ? new Set(shown.map(o => o.id)) : new Set())}
-                                className="w-4 h-4 accent-slate-900 cursor-pointer"/>
+                                className="w-4 h-4 accent-brand-600 cursor-pointer"/>
                             เลือกทั้งหมดในหน้านี้ ({shown.length})
                         </label>
                     )}
@@ -397,7 +410,7 @@ const App = () => {
                                 <div className="flex flex-wrap items-start gap-3 p-4">
                                     <input type="checkbox" checked={selected.has(o.id)}
                                         onChange={e => { const n = new Set(selected); e.target.checked ? n.add(o.id) : n.delete(o.id); setSelected(n); }}
-                                        className="w-4 h-4 mt-1 accent-slate-900 cursor-pointer"/>
+                                        className="w-4 h-4 mt-1 accent-brand-600 cursor-pointer"/>
                                     <div className="flex-1 min-w-[260px]">
                                         <div className="flex flex-wrap items-center gap-2">
                                             <span className="font-black text-slate-800">{o.no} · {o.customerName}</span>
@@ -441,7 +454,7 @@ const App = () => {
                         <div className="flex flex-wrap gap-3 justify-end">
                             {dialog.onConfirm && <button onClick={() => setDialog(null)} className="px-6 py-3 rounded-2xl border-2 border-slate-300 text-slate-500 font-black hover:bg-slate-100">ยกเลิก</button>}
                             <button autoFocus onClick={() => { const fn = dialog.onConfirm; setDialog(null); if (fn) fn(); }}
-                                className={`px-6 py-3 rounded-2xl font-black text-white shadow-lg active:scale-95 ${dialog.danger ? "bg-red-500 hover:bg-red-400" : "bg-slate-900 hover:bg-slate-700"}`}>
+                                className={`px-6 py-3 rounded-2xl font-black text-white shadow-lg active:scale-95 ${dialog.danger ? "bg-red-500 hover:bg-red-400" : "bg-brand-600 hover:bg-brand-700"}`}>
                                 {dialog.confirmLabel}
                             </button>
                         </div>

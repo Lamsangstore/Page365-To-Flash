@@ -6,16 +6,29 @@
     <title>Shipping Converter PRO — กรอกเอง</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📝</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // ธีมกลาง Lamsang (LAMSANG-THEME.md) — สีแบรนด์ทอง + แถบมืด
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#faf6ec', 100: '#f3ead4', 200: '#e7d5a8', 300: '#d9bf7d', 400: '#ccac60', 500: '#bf9c4f', 600: '#a8853f', 700: '#886a32', 800: '#6b5329', 900: '#4a3a1d' },
+                        panel: { 700: '#3a3833', 800: '#2a2825', 900: '#1c1b19' }
+                    }
+                }
+            }
+        };
+    </script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
     <script src="postal-db.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Anuphan:wght@300;400;600;700&display=swap');
-        body { font-family: 'Anuphan', sans-serif; cursor: default; }
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap');
+        body { font-family: 'Noto Sans Thai', system-ui, -apple-system, sans-serif; cursor: default; }
         .resize-handle { width: 6px; cursor: col-resize; position: absolute; right: 0; top: 0; bottom: 0; z-index: 10; transition: background 0.2s; }
-        .resize-handle:hover { background: #fbbf24; }
+        .resize-handle:hover { background: #ccac60; }
         textarea::-webkit-scrollbar { width: 4px; height: 4px; }
         textarea::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
         .select-none { user-select: none; }
@@ -826,8 +839,8 @@ const App = () => {
                             <div className="flex flex-col md:flex-row gap-3">
                                 <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={3}
                                     placeholder={"เช่น\nสมชาย ใจดี\n089-123-4567\n99/1 หมู่ 2 ต.บางรัก อ.เมือง จ.นนทบุรี 11000"}
-                                    className="flex-1 px-4 py-3 rounded-2xl border-2 border-slate-200 outline-none font-medium text-slate-700 resize-y focus:border-slate-400"/>
-                                <button onClick={parsePasted} className="px-6 py-3 rounded-2xl bg-slate-900 text-white font-black hover:bg-slate-700 transition-all shadow active:scale-95 whitespace-nowrap">
+                                    className="flex-1 px-4 py-3 rounded-2xl border-2 border-slate-200 outline-none font-medium text-slate-700 resize-y focus:border-brand-600"/>
+                                <button onClick={parsePasted} className="px-6 py-3 rounded-2xl bg-brand-600 text-white font-black hover:bg-brand-700 transition-all shadow active:scale-95 whitespace-nowrap">
                                     ✨ แยกข้อมูลให้
                                 </button>
                             </div>
@@ -1042,7 +1055,7 @@ const App = () => {
                             </div>
                             <div className="divide-y divide-slate-100 max-h-[420px] overflow-y-auto">
                                 {orders.map((o, i) => (
-                                    <div key={i} className={`flex flex-wrap items-center gap-3 px-6 py-4 hover:bg-yellow-50 transition-colors ${editingIndex === i ? "bg-amber-50" : ""}`}>
+                                    <div key={i} className={`flex flex-wrap items-center gap-3 px-6 py-4 hover:bg-brand-50 transition-colors ${editingIndex === i ? "bg-amber-50" : ""}`}>
                                         <span className="w-10 text-center text-xs font-black text-slate-300">{i + 1}</span>
                                         <div className="flex-1 min-w-[220px]">
                                             <div className="font-black text-slate-800 text-sm flex flex-wrap items-center gap-2">
@@ -1152,7 +1165,7 @@ const App = () => {
                                                         <input type="checkbox"
                                                             checked={selectedRows.size === data.length}
                                                             onChange={e => setSelectedRows(e.target.checked ? new Set(data.map((_,i)=>i)) : new Set())}
-                                                            className="w-4 h-4 accent-yellow-400 cursor-pointer" />
+                                                            className="w-4 h-4 accent-brand-600 cursor-pointer" />
                                                         <span className="text-[9px] text-slate-400 uppercase tracking-widest">ทั้งหมด</span>
                                                     </div>
                                                     <div onMouseDown={(e) => onResizeStart(0, e)} className="resize-handle" />
@@ -1181,8 +1194,8 @@ const App = () => {
                                                 const issues = rowIssues[rowIndex] || [];
                                                 const hasIssue = issues.length > 0;
                                                 return (
-                                                    <tr key={rowIndex} className={`${isChecked ? (isEven ? 'bg-white' : 'bg-slate-50') : 'bg-red-50 opacity-60'} border-b hover:bg-yellow-50 transition-colors group`}>
-                                                        <td className={`p-2 text-center border-r-2 sticky left-0 z-10 ${hasIssue ? "border-amber-400 border-l-4 border-l-amber-400" : "border-slate-200"} ${isChecked ? frozenBg : 'bg-red-100'} group-hover:bg-yellow-100`}
+                                                    <tr key={rowIndex} className={`${isChecked ? (isEven ? 'bg-white' : 'bg-slate-50') : 'bg-red-50 opacity-60'} border-b hover:bg-brand-50 transition-colors group`}>
+                                                        <td className={`p-2 text-center border-r-2 sticky left-0 z-10 ${hasIssue ? "border-amber-400 border-l-4 border-l-amber-400" : "border-slate-200"} ${isChecked ? frozenBg : 'bg-red-100'} group-hover:bg-brand-100`}
                                                             title={hasIssue ? "⚠ " + issues.join(", ") : ""}>
                                                             <div className="flex flex-col items-center gap-1">
                                                                 <input type="checkbox"
@@ -1192,7 +1205,7 @@ const App = () => {
                                                                         e.target.checked ? next.add(rowIndex) : next.delete(rowIndex);
                                                                         setSelectedRows(next);
                                                                     }}
-                                                                    className="w-4 h-4 accent-yellow-400 cursor-pointer" />
+                                                                    className="w-4 h-4 accent-brand-600 cursor-pointer" />
                                                                 <span className={`text-[10px] font-black ${hasIssue ? "text-amber-600" : "text-slate-400"}`}>{hasIssue ? "⚠" : ""}{rowIndex + 1}</span>
                                                             </div>
                                                         </td>
@@ -1207,7 +1220,7 @@ const App = () => {
                                                             const isRemark1 = i === remarkIdx;
                                                             const dynamicRows = i === 0 ? Math.max(1, Math.min(lineCount, 8)) : (i === 2 || isRemark1 ? 2 : 1);
                                                             return (
-                                                                <td key={i} className={`p-1 ${borderClass} ${currentCellBg} group-hover:bg-yellow-100`} style={stickyStyle}>
+                                                                <td key={i} className={`p-1 ${borderClass} ${currentCellBg} group-hover:bg-brand-100`} style={stickyStyle}>
                                                                     <textarea
                                                                         value={content}
                                                                         onChange={(e) => { const nd=[...data]; nd[rowIndex]={...nd[rowIndex], [h]:e.target.value}; setData(nd); }}
@@ -1249,7 +1262,7 @@ const App = () => {
                             )}
                             <button autoFocus
                                 onClick={() => { const fn = dialog.onConfirm; setDialog(null); if (fn) fn(); }}
-                                className={`px-6 py-3 rounded-2xl font-black text-white transition-all shadow-lg active:scale-95 ${dialog.danger ? "bg-red-500 hover:bg-red-400" : "bg-slate-900 hover:bg-slate-700"}`}>
+                                className={`px-6 py-3 rounded-2xl font-black text-white transition-all shadow-lg active:scale-95 ${dialog.danger ? "bg-red-500 hover:bg-red-400" : "bg-brand-600 hover:bg-brand-700"}`}>
                                 {dialog.confirmLabel}
                             </button>
                         </div>
